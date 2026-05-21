@@ -110,6 +110,27 @@
     </div>
   </div>
 
+  <!-- Save trade -->
+  <div class="save-bar">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <label style="font-size:13px;color:#666">Note (optional)</label>
+      <input type="text" id="tradeNote" placeholder="e.g. London breakout, HTF confluence..." class="note-input">
+    </div>
+    <div style="display:flex;gap:8px;flex-shrink:0">
+      <button class="save-btn" onclick="saveTrade()">&#x1F4BE; Save trade</button>
+      <button class="export-btn" onclick="exportTrades()">&#x2193; Export JSON</button>
+    </div>
+  </div>
+
+  <!-- Trade history -->
+  <div class="section" id="historySection" style="display:none">
+    <div class="tp-header">
+      <h3 style="margin:0">Trade history <span id="historyCount" class="pill">0 trades</span></h3>
+      <button class="del-btn" onclick="clearHistory()" style="font-size:11px;padding:3px 10px">Clear all</button>
+    </div>
+    <div id="historyList"></div>
+  </div>
+
 </div>
 <script src="js/app.js"></script>
 </body>

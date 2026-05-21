@@ -4,7 +4,8 @@ var tps = [];
 var pcs = [];
 var ACCOUNT_BAL = 18000;
 var DOLLAR_OPTS = [1,2,3,4,5,6,7,8,10,12,15,20,25,30,40,50];
-var STORAGE_KEY = 'wayne_calc_v1';
+var STORAGE_KEY   = 'wayne_calc_v1';
+var TRADES_KEY    = 'wayne_trades_v1';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -338,6 +339,165 @@ function calc() {
   saveState();
 }
 
+// ── Trade journal ─────────────────────────────────────────────────────────────
+
+function loadTrades() {
+  try { return JSON.parse(localStorage.getItem(TRADES_KEY) || '[]'); } catch(e) { return []; }
+}
+
+function saveTrades(trades) {
+  try { localStorage.setItem(TRADES_KEY, JSON.stringify(trades)); } catch(e) {}
+}
+
+function saveTrade() {
+  var zar    = parseFloat(g('zar').value) || 18.5;
+  var dir    = g('dir').value;
+  var entry  = parseFloat(g('entry').value) || 4546;
+  var sl     = parseFloat(g('sl').value) || 4560;
+  var ls     = parseFloat(g('ls').value) || 0.01;
+  var np     = parseInt(g('np').value) || 3;
+  var note   = (g('tradeNote').value || '').trim();
+
+  var slDist        = Math.abs(sl - entry);
+  var dollarPerLot  = ls * 100 * zar;
+  var grossRisk     = slDist * dollarPerLot * np;
+
+  var activePCs     = pcs.filter(function(p) { return p.enabled; });
+  var lockedLots    = activePCs.reduce(function(s, p) { return s + p.lots; }, 0);
+  var lockedProfit  = activePCs.reduce(function(s, p) { return s + p.dollar * dollarPerLot * p.lots; }, 0);
+  var remainingLots = Math.max(np - lockedLots, 0);
+  var grossRiskRem  = slDist * dollarPerLot * remainingLots;
+  var netRisk       = Math.max(grossRiskRem - lockedProfit, 0);
+  var isFreeRide    = lockedProfit >= grossRiskRem;
+
+  var bestTP    = tps.length > 0 ? tps[tps.length - 1] : null;
+  var tpProfit  = bestTP ? Math.abs(bestTP.val - entry) * dollarPerLot * remainingLots : 0;
+  var bestRRR   = bestTP && slDist > 0 ? Math.abs(bestTP.val - entry) / slDist : 0;
+
+  var verdictText = isFreeRide ? 'Free ride' : bestRRR >= 2.5 ? 'Strong setup' : bestRRR >= 1.5 ? 'Acceptable' : 'Weak';
+  var verdictClass = isFreeRide ? 'vfree' : bestRRR >= 2.5 ? 'vg' : bestRRR >= 1.5 ? 'vo' : 'vb';
+
+  var trade = {
+    id:            Date.now(),
+    timestamp:     new Date().toLocaleString('en-ZA'),
+    note:          note,
+    direction:     dir,
+    zarRate:       zar,
+    entry:         entry,
+    sl:            sl,
+    slDistance:    parseFloat(slDist.toFixed(2)),
+    slPips:        Math.round(slDist * 10),
+    lotSize:       ls,
+    positions:     np,
+    totalLots:     parseFloat((ls * np).toFixed(2)),
+    grossRisk:     Math.round(grossRisk),
+    netRisk:       Math.round(netRisk),
+    isFreeRide:    isFreeRide,
+    lockedProfit:  Math.round(lockedProfit),
+    lockedLots:    lockedLots,
+    remainingLots: remainingLots,
+    tpProfit:      Math.round(tpProfit),
+    totalProfit:   Math.round(lockedProfit + tpProfit),
+    bestRRR:       parseFloat(bestRRR.toFixed(2)),
+    verdict:       verdictText,
+    verdictClass:  verdictClass,
+    partialCloses: activePCs.map(function(pc) {
+      return { label: pc.label, dollar: pc.dollar, pips: pc.dollar * 10, lots: pc.lots, profit: Math.round(pc.dollar * dollarPerLot * pc.lots) };
+    }),
+    takeProfits: tps.map(function(tp) {
+      var d = Math.abs(tp.val - entry);
+      return { label: tp.label, price: tp.val, dollar: parseFloat(d.toFixed(2)), pips: Math.round(d * 10), rrr: parseFloat((slDist > 0 ? d / slDist : 0).toFixed(2)) };
+    })
+  };
+
+  var trades = loadTrades();
+  trades.unshift(trade);
+  saveTrades(trades);
+  g('tradeNote').value = '';
+  renderHistory();
+
+  var btn = g('saveFlash') || document.createElement('span');
+  btn.id = 'saveFlash';
+  btn.style.cssText = 'font-size:12px;color:#1d9e75;font-weight:700;transition:opacity 1s';
+  btn.textContent = 'Saved!';
+  var bar = document.querySelector('.save-bar');
+  if (!document.getElementById('saveFlash')) bar.appendChild(btn);
+  btn.style.opacity = '1';
+  setTimeout(function() { btn.style.opacity = '0'; }, 1500);
+}
+
+function renderHistory() {
+  var trades = loadTrades();
+  var section = g('historySection');
+  var list    = g('historyList');
+  var countEl = g('historyCount');
+
+  if (trades.length === 0) { section.style.display = 'none'; return; }
+  section.style.display = 'block';
+  countEl.textContent = trades.length + ' trade' + (trades.length !== 1 ? 's' : '');
+
+  list.innerHTML = trades.map(function(t, i) {
+    var partialHtml = '';
+    if (t.partialCloses && t.partialCloses.length > 0) {
+      partialHtml = '<div class="trade-partials"><strong>Partial closes locked:</strong> '
+        + t.partialCloses.map(function(pc) {
+            return pc.label + ' — ' + pc.lots + ' lot' + (pc.lots > 1 ? 's' : '') + ' @ $' + pc.dollar + ' (R' + pc.profit.toLocaleString() + ')';
+          }).join(' &nbsp;|&nbsp; ')
+        + '</div>';
+    }
+    var tpHtml = t.takeProfits && t.takeProfits.length > 0
+      ? t.takeProfits.map(function(tp) { return tp.label + ' ' + tp.price + ' (1:' + tp.rrr + ')'; }).join(' · ')
+      : '—';
+
+    return '<div class="trade-card">'
+      + '<div class="trade-card-header">'
+      +   '<span class="trade-ts">' + t.timestamp + '</span>'
+      +   '<span class="trade-dir ' + t.direction + '">' + t.direction.toUpperCase() + '</span>'
+      +   '<span class="trade-note-text">' + (t.note || '') + '</span>'
+      +   '<button class="trade-del-btn" onclick="deleteTrade(' + i + ')" title="Remove">&#x2715;</button>'
+      + '</div>'
+      + '<div class="trade-grid">'
+      +   '<div class="trade-stat"><div class="ts-lbl">Entry</div><div class="ts-val">' + t.entry + '</div></div>'
+      +   '<div class="trade-stat"><div class="ts-lbl">Stop loss</div><div class="ts-val">' + t.sl + ' ($' + t.slDistance + ' / ' + t.slPips + ' pips)</div></div>'
+      +   '<div class="trade-stat"><div class="ts-lbl">Lots</div><div class="ts-val">' + t.totalLots + ' (' + t.positions + ' &times; ' + t.lotSize + ')</div></div>'
+      +   '<div class="trade-stat"><div class="ts-lbl">ZAR/USD</div><div class="ts-val">' + t.zarRate + '</div></div>'
+      +   '<div class="trade-stat"><div class="ts-lbl">Gross risk</div><div class="ts-val" style="color:#e24b4a">R ' + t.grossRisk.toLocaleString() + '</div></div>'
+      +   '<div class="trade-stat"><div class="ts-lbl">Net risk</div><div class="ts-val" style="color:' + (t.isFreeRide ? '#0c447c' : '#e24b4a') + '">' + (t.isFreeRide ? 'FREE RIDE' : 'R ' + t.netRisk.toLocaleString()) + '</div></div>'
+      +   '<div class="trade-stat"><div class="ts-lbl">Locked profit</div><div class="ts-val" style="color:#1d9e75">R ' + t.lockedProfit.toLocaleString() + '</div></div>'
+      +   '<div class="trade-stat"><div class="ts-lbl">Best RRR</div><div class="ts-val">1:' + t.bestRRR + '</div></div>'
+      + '</div>'
+      + partialHtml
+      + '<div style="margin-top:8px;font-size:11px;color:#999">TPs: ' + tpHtml + '</div>'
+      + '<div class="trade-verdict ' + t.verdictClass + '">' + t.verdict + '</div>'
+      + '</div>';
+  }).join('');
+}
+
+function deleteTrade(i) {
+  var trades = loadTrades();
+  trades.splice(i, 1);
+  saveTrades(trades);
+  renderHistory();
+}
+
+function clearHistory() {
+  if (!confirm('Clear all saved trades?')) return;
+  saveTrades([]);
+  renderHistory();
+}
+
+function exportTrades() {
+  var trades = loadTrades();
+  if (trades.length === 0) { alert('No saved trades yet.'); return; }
+  var blob = new Blob([JSON.stringify(trades, null, 2)], { type: 'application/json' });
+  var url  = URL.createObjectURL(blob);
+  var a    = document.createElement('a');
+  a.href   = url;
+  a.download = 'wayne-trades-' + new Date().toISOString().slice(0, 10) + '.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 (function init() {
@@ -348,4 +508,5 @@ function calc() {
   } else {
     calc();
   }
+  renderHistory();
 })();
