@@ -131,7 +131,7 @@ function renderTPs(rem, dollarPerLot, slDist, entry) {
     var dist = Math.abs(tp.val - entry);
     var profit = dist * dollarPerLot * rem;
     var rrr = slDist > 0 ? (dist / slDist).toFixed(1) : '0';
-    var rrc = parseFloat(rrr) >= 2 ? '#1d9e75' : parseFloat(rrr) >= 1.5 ? '#ba7517' : '#e24b4a';
+    var rrc = parseFloat(rrr) >= 2 ? '#0ecb8a' : parseFloat(rrr) >= 1.5 ? '#f5b935' : '#f64f57';
     var row = document.createElement('div');
     row.className = 'tp-row';
     row.innerHTML = '<label>' + tp.label + '</label>'
@@ -208,13 +208,13 @@ function calc() {
   if (activePCs.length > 0) {
     if (isFreeRide) {
       netRiskEl.textContent = 'FREE RIDE';
-      netRiskEl.style.color = '#0c447c';
+      netRiskEl.style.color = '#4a90f0';
       netRiskEl.style.fontSize = '14px';
       boxNet.className = 'box highlight';
       g('netRiskSub').textContent = 'locked > SL loss 🎉';
     } else {
       netRiskEl.textContent = fz(netRisk);
-      netRiskEl.style.color = netRisk < grossRisk / 2 ? '#ba7517' : '#e24b4a';
+      netRiskEl.style.color = netRisk < grossRisk / 2 ? '#f5b935' : '#f64f57';
       netRiskEl.style.fontSize = '18px';
       boxNet.className = 'box';
       g('netRiskSub').textContent = netRiskPct + '% of account';
@@ -223,11 +223,11 @@ function calc() {
     g('adjGrossRisk').textContent = '-' + fz(grossRisk);
     g('adjLocked').textContent    = '+' + fz(lockedProfit);
     g('adjNetRisk').textContent   = isFreeRide ? 'FREE RIDE 🎉 (R' + Math.round(lockedProfit - grossRiskRemaining).toLocaleString() + ' guaranteed)' : '-' + fz(netRisk);
-    g('adjNetRisk').style.color   = isFreeRide ? '#0c447c' : netRisk < grossRisk / 2 ? '#ba7517' : '#e24b4a';
+    g('adjNetRisk').style.color   = isFreeRide ? '#4a90f0' : netRisk < grossRisk / 2 ? '#f5b935' : '#f64f57';
     g('adjNetPct').textContent    = isFreeRide ? '0% — you cannot lose' : netRiskPct + '%';
   } else {
     netRiskEl.textContent = fz(grossRisk);
-    netRiskEl.style.color = '#e24b4a';
+    netRiskEl.style.color = '#f64f57';
     netRiskEl.style.fontSize = '18px';
     boxNet.className = 'box';
     g('netRiskSub').textContent = 'no locks yet';
@@ -249,20 +249,20 @@ function calc() {
   g('totalProfit').textContent = fz(lockedProfit + tpProfit);
 
   // Breakdown table
-  var html = '<tr style="background:#fff5f5">'
-    + '<td style="color:#e24b4a">Stop loss</td>'
+  var html = '<tr style="background:rgba(246,79,87,.08)">'
+    + '<td style="color:#f64f57">Stop loss</td>'
     + '<td style="color:#aaa">' + sl.toFixed(1) + '</td>'
-    + '<td style="color:#e24b4a">$' + slDist.toFixed(1) + '</td>'
-    + '<td style="color:#aaa">' + slPips + '</td>'
-    + '<td style="color:#aaa">' + np + '</td>'
-    + '<td style="color:#e24b4a;font-weight:700">-' + fz(grossRisk) + '</td>'
-    + '<td style="color:#e24b4a">gross</td>'
+    + '<td style="color:#f64f57">$' + slDist.toFixed(1) + '</td>'
+    + '<td style="color:#5c6b84">' + slPips + '</td>'
+    + '<td style="color:#5c6b84">' + np + '</td>'
+    + '<td style="color:#f64f57;font-weight:700">-' + fz(grossRisk) + '</td>'
+    + '<td style="color:#f64f57">gross</td>'
     + '</tr>';
 
   if (activePCs.length > 0) {
-    html += '<tr style="background:#fff8e6">'
-      + '<td style="color:#ba7517" colspan="5">Net real risk (after locks)</td>'
-      + '<td style="color:' + (isFreeRide ? '#0c447c' : netRisk < grossRisk / 2 ? '#ba7517' : '#e24b4a') + ';font-weight:700">' + (isFreeRide ? 'FREE RIDE 🎉' : '-' + fz(netRisk)) + '</td>'
+    html += '<tr style="background:rgba(245,185,53,.08)">'
+      + '<td style="color:#f5b935" colspan="5">Net real risk (after locks)</td>'
+      + '<td style="color:' + (isFreeRide ? '#4a90f0' : netRisk < grossRisk / 2 ? '#f5b935' : '#f64f57') + ';font-weight:700">' + (isFreeRide ? 'FREE RIDE 🎉' : '-' + fz(netRisk)) + '</td>'
       + '<td></td></tr>';
   }
 
@@ -271,14 +271,14 @@ function calc() {
     var pips   = pc.dollar * 10;
     var profit = pc.dollar * dollarPerLot * pc.lots;
     var rrr    = slDist > 0 ? (pc.dollar / slDist).toFixed(1) : '0';
-    html += '<tr style="background:#fafdf7">'
-      + '<td style="color:#1d9e75">&#x1F512; ' + pc.label + '</td>'
-      + '<td style="color:#aaa">' + price.toFixed(1) + '</td>'
-      + '<td style="color:#888">$' + pc.dollar + '</td>'
-      + '<td style="color:#aaa">' + pips + '</td>'
-      + '<td style="color:#1d9e75">' + pc.lots + '</td>'
-      + '<td style="color:#1d9e75;font-weight:700">+' + fz(profit) + '</td>'
-      + '<td style="color:#ba7517">1:' + rrr + '</td>'
+    html += '<tr style="background:rgba(14,203,138,.06)">'
+      + '<td style="color:#0ecb8a">&#x1F512; ' + pc.label + '</td>'
+      + '<td style="color:#5c6b84">' + price.toFixed(1) + '</td>'
+      + '<td style="color:#5c6b84">$' + pc.dollar + '</td>'
+      + '<td style="color:#5c6b84">' + pips + '</td>'
+      + '<td style="color:#0ecb8a">' + pc.lots + '</td>'
+      + '<td style="color:#0ecb8a;font-weight:700">+' + fz(profit) + '</td>'
+      + '<td style="color:#f5b935">1:' + rrr + '</td>'
       + '</tr>';
   });
 
@@ -287,21 +287,21 @@ function calc() {
     var pips   = Math.round(dist * 10);
     var profit = dist * dollarPerLot * remainingLots;
     var rrr    = slDist > 0 ? (dist / slDist).toFixed(1) : '0';
-    var rrc    = parseFloat(rrr) >= 2 ? '#1d9e75' : parseFloat(rrr) >= 1.5 ? '#ba7517' : '#e24b4a';
-    html += '<tr style="background:#f0faf5">'
-      + '<td style="color:#1d9e75">&#x1F3AF; ' + tp.label + '</td>'
-      + '<td style="color:#aaa">' + tp.val.toFixed(1) + '</td>'
-      + '<td style="color:#888">$' + dist.toFixed(1) + '</td>'
-      + '<td style="color:#aaa">' + pips + '</td>'
-      + '<td style="color:#1d9e75">' + remainingLots + '</td>'
-      + '<td style="color:#1d9e75;font-weight:700">+' + fz(profit) + '</td>'
+    var rrc    = parseFloat(rrr) >= 2 ? '#0ecb8a' : parseFloat(rrr) >= 1.5 ? '#f5b935' : '#f64f57';
+    html += '<tr style="background:rgba(14,203,138,.04)">'
+      + '<td style="color:#0ecb8a">&#x1F3AF; ' + tp.label + '</td>'
+      + '<td style="color:#5c6b84">' + tp.val.toFixed(1) + '</td>'
+      + '<td style="color:#5c6b84">$' + dist.toFixed(1) + '</td>'
+      + '<td style="color:#5c6b84">' + pips + '</td>'
+      + '<td style="color:#0ecb8a">' + remainingLots + '</td>'
+      + '<td style="color:#0ecb8a;font-weight:700">+' + fz(profit) + '</td>'
       + '<td style="color:' + rrc + ';font-weight:700">1:' + rrr + '</td>'
       + '</tr>';
   });
 
-  html += '<tr style="border-top:2px solid #e0e0e0;background:#f9f9f9">'
+  html += '<tr style="border-top:1px solid #1c2538;background:rgba(255,255,255,.03)">'
     + '<td colspan="5" style="font-weight:700">Total (locked + best TP)</td>'
-    + '<td style="color:#1d9e75;font-weight:700;font-size:14px">+' + fz(lockedProfit + tpProfit) + '</td>'
+    + '<td style="color:#0ecb8a;font-weight:700;font-size:14px">+' + fz(lockedProfit + tpProfit) + '</td>'
     + '<td></td></tr>';
   g('tbl').innerHTML = html;
 
@@ -319,18 +319,18 @@ function calc() {
     var perL = d * dollarPerLot;
     var tot  = perL * np;
     var rrr  = slDist > 0 ? (d / slDist).toFixed(1) : '0';
-    var rrc  = parseFloat(rrr) >= 2 ? '#1d9e75' : parseFloat(rrr) >= 1 ? '#ba7517' : '#e24b4a';
+    var rrc  = parseFloat(rrr) >= 2 ? '#0ecb8a' : parseFloat(rrr) >= 1 ? '#f5b935' : '#f64f57';
     var tags = '';
-    tps.forEach(function(tp) { if (Math.abs(d - Math.abs(tp.val - entry)) < 0.3) tags += ' <span style="font-size:10px;background:#eaf3de;color:#27500a;padding:1px 6px;border-radius:99px">' + tp.label + '</span>'; });
-    activePCs.forEach(function(pc) { if (d === pc.dollar) tags += ' <span style="font-size:10px;background:#faeeda;color:#633806;padding:1px 6px;border-radius:99px">&#x1F512;</span>'; });
+    tps.forEach(function(tp) { if (Math.abs(d - Math.abs(tp.val - entry)) < 0.3) tags += ' <span style="font-size:10px;background:rgba(14,203,138,.15);color:#0ecb8a;padding:1px 6px;border-radius:99px">' + tp.label + '</span>'; });
+    activePCs.forEach(function(pc) { if (d === pc.dollar) tags += ' <span style="font-size:10px;background:rgba(245,185,53,.15);color:#f5b935;padding:1px 6px;border-radius:99px">&#x1F512;</span>'; });
     var hiSL = Math.abs(d - slDist) < 0.3;
-    if (hiSL) tags += ' <span style="font-size:10px;background:#fcebeb;color:#791f1f;padding:1px 6px;border-radius:99px">SL</span>';
-    var bg = tags.includes('TP') ? 'background:#f0faf5;' : tags.includes('🔒') ? 'background:#fafdf7;' : hiSL ? 'background:#fff5f5;' : '';
+    if (hiSL) tags += ' <span style="font-size:10px;background:rgba(246,79,87,.15);color:#f64f57;padding:1px 6px;border-radius:99px">SL</span>';
+    var bg = tags.includes('TP') ? 'background:rgba(14,203,138,.04);' : tags.includes('🔒') ? 'background:rgba(14,203,138,.06);' : hiSL ? 'background:rgba(246,79,87,.08);' : '';
     dhtml += '<tr style="' + bg + '">'
       + '<td>$' + d + tags + '</td>'
-      + '<td style="color:#888">' + pips + '</td>'
-      + '<td style="color:#1d9e75">' + fz(perL) + '</td>'
-      + '<td style="color:#1d9e75;font-weight:700">' + fz(tot) + '</td>'
+      + '<td style="color:#5c6b84">' + pips + '</td>'
+      + '<td style="color:#0ecb8a">' + fz(perL) + '</td>'
+      + '<td style="color:#0ecb8a;font-weight:700">' + fz(tot) + '</td>'
       + '<td style="color:' + rrc + ';font-weight:600">1:' + rrr + '</td>'
       + '</tr>';
   });
@@ -462,7 +462,7 @@ function renderHistory() {
       +   '<div class="trade-stat"><div class="ts-lbl">Lots</div><div class="ts-val">' + t.totalLots + ' (' + t.positions + ' &times; ' + t.lotSize + ')</div></div>'
       +   '<div class="trade-stat"><div class="ts-lbl">ZAR/USD</div><div class="ts-val">' + t.zarRate + '</div></div>'
       +   '<div class="trade-stat"><div class="ts-lbl">Gross risk</div><div class="ts-val" style="color:#e24b4a">R ' + t.grossRisk.toLocaleString() + '</div></div>'
-      +   '<div class="trade-stat"><div class="ts-lbl">Net risk</div><div class="ts-val" style="color:' + (t.isFreeRide ? '#0c447c' : '#e24b4a') + '">' + (t.isFreeRide ? 'FREE RIDE' : 'R ' + t.netRisk.toLocaleString()) + '</div></div>'
+      +   '<div class="trade-stat"><div class="ts-lbl">Net risk</div><div class="ts-val" style="color:' + (t.isFreeRide ? '#4a90f0' : '#f64f57') + '">' + (t.isFreeRide ? 'FREE RIDE' : 'R ' + t.netRisk.toLocaleString()) + '</div></div>'
       +   '<div class="trade-stat"><div class="ts-lbl">Locked profit</div><div class="ts-val" style="color:#1d9e75">R ' + t.lockedProfit.toLocaleString() + '</div></div>'
       +   '<div class="trade-stat"><div class="ts-lbl">Best RRR</div><div class="ts-val">1:' + t.bestRRR + '</div></div>'
       + '</div>'
