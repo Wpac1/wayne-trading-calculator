@@ -2,8 +2,11 @@
 
 var STMT_KEY    = 'wayne_stmt_v1';
 var stmtTrades  = [];
+var stmtSummary = {};
 var stmtCharts  = {};
 var logFilter   = 'all';
+var logPage     = 1;
+var LOG_PAGE_SZ = 10;
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
 
@@ -21,11 +24,8 @@ function initDashboard() {
   try {
     var cached = JSON.parse(localStorage.getItem(STMT_KEY) || 'null');
     if (cached && Array.isArray(cached.trades) && cached.trades.length > 0) {
-      stmtTrades = cached.trades.map(function(t) {
-        t.openDate  = t.openDate  ? new Date(t.openDate)  : null;
-        t.closeDate = t.closeDate ? new Date(t.closeDate) : null;
-        return t;
-      });
+      stmtTrades  = cached.trades;
+      stmtSummary = cached.summary || {};
       renderDashboard();
       return;
     }
@@ -36,11 +36,7 @@ function initDashboard() {
 function fetchStatement() {
   fetch('DetailedStatement.htm')
     .then(function(r) { if (!r.ok) throw new Error('not found'); return r.text(); })
-    .then(function(html) {
-      stmtTrades = parseStatement(html);
-      cacheStmt();
-      renderDashboard();
-    })
+    .then(function(html) { handleFetched(html); })
     .catch(function() {
       document.getElementById('dashLoader').style.display  = 'block';
       document.getElementById('dashContent').style.display = 'none';
@@ -49,10 +45,19 @@ function fetchStatement() {
 
 function reloadStatement() {
   try { localStorage.removeItem(STMT_KEY); } catch(e) {}
+  stmtSummary = {};
   destroyCharts();
   document.getElementById('dashContent').style.display = 'none';
   document.getElementById('dashLoader').style.display  = 'none';
   fetchStatement();
+}
+
+function handleFetched(html) {
+  var result  = parseStatement(html);
+  stmtTrades  = result.trades;
+  stmtSummary = result.summary;
+  cacheStmt();
+  renderDashboard();
 }
 
 function loadStatementFile(input) {
@@ -60,7 +65,9 @@ function loadStatementFile(input) {
   if (!file) return;
   var reader = new FileReader();
   reader.onload = function(e) {
-    stmtTrades = parseStatement(e.target.result);
+    var result  = parseStatement(e.target.result);
+    stmtTrades  = result.trades;
+    stmtSummary = result.summary;
     cacheStmt();
     document.getElementById('dashLoader').style.display = 'none';
     renderDashboard();
@@ -69,25 +76,48 @@ function loadStatementFile(input) {
 }
 
 function cacheStmt() {
-  try { localStorage.setItem(STMT_KEY, JSON.stringify({ trades: stmtTrades })); } catch(e) {}
+  try { localStorage.setItem(STMT_KEY, JSON.stringify({ trades: stmtTrades, summary: stmtSummary })); } catch(e) {}
 }
 
 // ── Parse DetailedStatement.htm ───────────────────────────────────────────────
 
 function parseStatement(htmlText) {
-  var parser = new DOMParser();
-  var doc    = parser.parseFromString(htmlText, 'text/html');
-  var trades = [];
+  var parser  = new DOMParser();
+  var doc     = parser.parseFromString(htmlText, 'text/html');
+  var trades  = [];
+  var summary = {};
 
   doc.querySelectorAll('table tr').forEach(function(row) {
     var cells = row.querySelectorAll('td');
+
+    // ── Summary rows (Balance, Equity, Deposit, Closed P/L) ──
+    if (cells.length >= 2) {
+      var label = cells[0].textContent.trim();
+      var val2  = cells.length > 2 ? pn(cells[2].textContent) : NaN;
+      var val1  = cells.length > 1 ? pn(cells[1].textContent) : NaN;
+      if (label === 'Balance:')         summary.balance    = isNaN(val2) ? val1 : val2;
+      if (label === 'Closed Trade P/L:') summary.closedPL  = isNaN(val2) ? val1 : val2;
+      if (label === 'Deposit/Withdrawal:') summary.deposit = isNaN(val2) ? val1 : val2;
+
+      // Bold cells with colspans carry the summary values
+      var bold = row.querySelectorAll('b');
+      bold.forEach(function(b) {
+        var t = b.textContent.trim();
+        if (t === 'Balance:' && bold[1]) summary.balance   = pn(bold[1].textContent);
+        if (t === 'Equity:'  && bold[1]) summary.equity    = pn(bold[1].textContent);
+        if (t === 'Closed Trade P/L:' && bold[1]) summary.closedPL = pn(bold[1].textContent);
+        if (t === 'Deposit/Withdrawal:' && bold[1]) summary.deposit = pn(bold[1].textContent);
+        if (t === 'Floating P/L:' && bold[1]) summary.floatingPL = pn(bold[1].textContent);
+      });
+    }
+
     if (cells.length < 14) return;
 
     var type = cells[2].textContent.trim().toLowerCase();
     if (type !== 'buy' && type !== 'sell') return;
 
     var closeTime = cells[8].textContent.trim();
-    if (!closeTime || closeTime.length < 10) return; // open trades have no close
+    if (!closeTime || closeTime.length < 10) return;
 
     var profit = pn(cells[13].textContent);
     if (isNaN(profit)) return;
@@ -115,7 +145,7 @@ function parseStatement(htmlText) {
     });
   });
 
-  return trades;
+  return { trades: trades, summary: summary };
 }
 
 // helpers
@@ -155,6 +185,7 @@ function destroyCharts() {
 function renderDashboard() {
   destroyCharts();
   logFilter = 'all';
+  logPage   = 1;
   document.getElementById('dashContent').style.display = 'block';
   document.getElementById('dashLoader').style.display  = 'none';
 
@@ -171,44 +202,60 @@ function renderDashboard() {
 // ── KPI cards ─────────────────────────────────────────────────────────────────
 
 function renderKPIs(trades) {
-  var wins   = trades.filter(function(t) { return t.profit > 0; });
-  var losses = trades.filter(function(t) { return t.profit <= 0; });
+  var wins    = trades.filter(function(t) { return t.profit > 0; });
+  var losses  = trades.filter(function(t) { return t.profit <= 0; });
   var totalPL = trades.reduce(function(s,t) { return s + t.profit; }, 0);
-  var winRate  = trades.length ? wins.length / trades.length * 100 : 0;
-  var avgWin   = wins.length   ? wins.reduce(function(s,t){return s+t.profit;},0)/wins.length : 0;
-  var avgLoss  = losses.length ? Math.abs(losses.reduce(function(s,t){return s+t.profit;},0)/losses.length) : 0;
-  var sumWins  = wins.reduce(function(s,t){return s+t.profit;},0);
-  var sumLoss  = Math.abs(losses.reduce(function(s,t){return s+t.profit;},0));
-  var pf       = sumLoss > 0 ? (sumWins/sumLoss).toFixed(2) : '∞';
-  var slHits   = trades.filter(function(t) { return t.isSLHit; }).length;
+  var winRate = trades.length ? wins.length / trades.length * 100 : 0;
+  var avgWin  = wins.length   ? wins.reduce(function(s,t){return s+t.profit;},0)/wins.length : 0;
+  var avgLoss = losses.length ? Math.abs(losses.reduce(function(s,t){return s+t.profit;},0)/losses.length) : 0;
+  var sumWins = wins.reduce(function(s,t){return s+t.profit;},0);
+  var sumLoss = Math.abs(losses.reduce(function(s,t){return s+t.profit;},0));
+  var pf      = sumLoss > 0 ? (sumWins/sumLoss).toFixed(2) : '∞';
+  var slHits  = trades.filter(function(t) { return t.isSLHit; }).length;
 
   var byDay = {};
   trades.forEach(function(t) {
     var d = fmtDay(t.closeDate);
     if (d) byDay[d] = (byDay[d]||0) + t.profit;
   });
-  var days = Object.entries(byDay);
+  var days     = Object.entries(byDay);
   var bestDay  = days.length ? days.reduce(function(a,b){return b[1]>a[1]?b:a;}) : null;
   var worstDay = days.length ? days.reduce(function(a,b){return b[1]<a[1]?b:a;}) : null;
 
+  // Account summary from parsed statement
+  var s       = stmtSummary;
+  var balance = !isNaN(s.balance)    ? 'R ' + s.balance.toLocaleString()    : '—';
+  var equity  = !isNaN(s.equity)     ? 'R ' + s.equity.toLocaleString()     : '—';
+  var deposit = !isNaN(s.deposit)    ? 'R ' + s.deposit.toLocaleString()    : '—';
+  var floatPL = !isNaN(s.floatingPL) ? (s.floatingPL >= 0 ? '+' : '') + 'R ' + Math.round(s.floatingPL).toLocaleString() : '—';
+
+  // Account block (full-width row at top)
+  var acctHtml = '<div class="kpi-row-account">'
+    + '<div class="kpi-card kpi-gold"><div class="kpi-label">Account Balance</div><div class="kpi-value">' + balance + '</div><div class="kpi-sub">as of statement date</div></div>'
+    + '<div class="kpi-card"><div class="kpi-label">Equity</div><div class="kpi-value">' + equity + '</div><div class="kpi-sub">balance + floating P/L</div></div>'
+    + '<div class="kpi-card ' + (!isNaN(s.floatingPL) && s.floatingPL >= 0 ? 'kpi-green' : 'kpi-red') + '"><div class="kpi-label">Floating P/L</div><div class="kpi-value">' + floatPL + '</div><div class="kpi-sub">open positions</div></div>'
+    + '<div class="kpi-card"><div class="kpi-label">Net Deposit</div><div class="kpi-value">' + deposit + '</div><div class="kpi-sub">total funded</div></div>'
+    + '</div>';
+
   var kpis = [
-    { label:'Closed P/L',     value: rZar(totalPL), sub: trades.length + ' closed trades',            cls: totalPL >= 0 ? 'kpi-green' : 'kpi-red' },
-    { label:'Win Rate',       value: winRate.toFixed(1) + '%', sub: wins.length + 'W  ·  ' + losses.length + 'L', cls: winRate >= 50 ? 'kpi-green' : 'kpi-red' },
-    { label:'Profit Factor',  value: pf, sub: 'gross wins ÷ gross losses',             cls: parseFloat(pf) >= 1.5 ? 'kpi-green' : parseFloat(pf) >= 1 ? '' : 'kpi-red' },
-    { label:'Avg Win',        value: rZar(avgWin),  sub: 'per winning trade',          cls: 'kpi-green' },
-    { label:'Avg Loss',       value: rZar(avgLoss), sub: 'per losing trade',           cls: 'kpi-red' },
-    { label:'SL Hits',        value: slHits, sub: trades.length ? (slHits/trades.length*100).toFixed(0) + '% of all trades' : '',  cls: '' },
-    { label:'Best Day',       value: bestDay  ? rZar(bestDay[1])  : '-', sub: bestDay  ? bestDay[0]  : '', cls: 'kpi-green' },
-    { label:'Worst Day',      value: worstDay ? rZar(worstDay[1]) : '-', sub: worstDay ? worstDay[0] : '', cls: 'kpi-red' },
+    { label:'Closed P/L',    value: rZar(totalPL), sub: trades.length + ' closed trades',     cls: totalPL >= 0 ? 'kpi-green' : 'kpi-red' },
+    { label:'Win Rate',      value: winRate.toFixed(1) + '%', sub: wins.length + 'W · ' + losses.length + 'L', cls: winRate >= 50 ? 'kpi-green' : 'kpi-red' },
+    { label:'Profit Factor', value: pf, sub: 'wins ÷ losses (gross)', cls: parseFloat(pf) >= 1.5 ? 'kpi-green' : parseFloat(pf) >= 1 ? '' : 'kpi-red' },
+    { label:'Avg Win',       value: rZar(avgWin),  sub: 'per winning trade',  cls: 'kpi-green' },
+    { label:'Avg Loss',      value: rZar(avgLoss), sub: 'per losing trade',   cls: 'kpi-red' },
+    { label:'SL Hits',       value: slHits, sub: trades.length ? (slHits/trades.length*100).toFixed(0) + '% of trades' : '', cls: '' },
+    { label:'Best Day',      value: bestDay  ? rZar(bestDay[1])  : '-', sub: bestDay  ? bestDay[0]  : '', cls: 'kpi-green' },
+    { label:'Worst Day',     value: worstDay ? rZar(worstDay[1]) : '-', sub: worstDay ? worstDay[0] : '', cls: 'kpi-red' },
   ];
 
-  document.getElementById('kpiGrid').innerHTML = kpis.map(function(k) {
-    return '<div class="kpi-card ' + k.cls + '">'
-      + '<div class="kpi-label">' + k.label + '</div>'
-      + '<div class="kpi-value">' + k.value + '</div>'
-      + '<div class="kpi-sub">'  + k.sub   + '</div>'
-      + '</div>';
-  }).join('');
+  document.getElementById('kpiGrid').innerHTML = acctHtml
+    + kpis.map(function(k) {
+        return '<div class="kpi-card ' + k.cls + '">'
+          + '<div class="kpi-label">' + k.label + '</div>'
+          + '<div class="kpi-value">' + k.value + '</div>'
+          + '<div class="kpi-sub">'  + k.sub   + '</div>'
+          + '</div>';
+      }).join('');
 }
 
 // ── Chart helpers ─────────────────────────────────────────────────────────────
@@ -404,11 +451,17 @@ function renderLogFilters() {
 
 function setFilter(f) {
   logFilter = f;
+  logPage   = 1;
   var filtered = applyFilter(stmtTrades);
   renderLogFilters();
   renderTradeLog(filtered);
   if (stmtCharts.winloss) { stmtCharts.winloss.destroy(); stmtCharts.winloss = null; }
   renderWinLossChart(filtered);
+}
+
+function goPage(p) {
+  logPage = p;
+  renderTradeLog(applyFilter(stmtTrades));
 }
 
 function applyFilter(trades) {
@@ -418,8 +471,14 @@ function applyFilter(trades) {
 }
 
 function renderTradeLog(trades) {
-  var sorted = trades.slice().sort(function(a,b){ return new Date(b.closeDate) - new Date(a.closeDate); });
-  document.getElementById('tradeLogBody').innerHTML = sorted.map(function(t) {
+  var sorted   = trades.slice().sort(function(a,b){ return new Date(b.closeDate) - new Date(a.closeDate); });
+  var total    = sorted.length;
+  var pages    = Math.max(1, Math.ceil(total / LOG_PAGE_SZ));
+  logPage      = Math.min(logPage, pages);
+  var start    = (logPage - 1) * LOG_PAGE_SZ;
+  var pageRows = sorted.slice(start, start + LOG_PAGE_SZ);
+
+  document.getElementById('tradeLogBody').innerHTML = pageRows.map(function(t) {
     var slBadge  = t.isSLHit ? '<span class="log-sl">SL</span>' : '';
     var profCls  = t.profit >= 0 ? 'profit-pos' : 'profit-neg';
     var dirCls   = t.type === 'buy' ? 'dir-buy' : 'dir-sell';
@@ -439,4 +498,30 @@ function renderTradeLog(trades) {
       + '<td class="' + profCls + '">' + (t.profit >= 0 ? '+' : '') + Math.round(t.profit).toLocaleString() + '</td>'
       + '</tr>';
   }).join('');
+
+  // Pagination controls
+  var paginHtml = '<div class="pagination">'
+    + '<span class="pag-info">' + (start+1) + '–' + Math.min(start+LOG_PAGE_SZ, total) + ' of ' + total + '</span>'
+    + '<button class="pag-btn" onclick="goPage(' + (logPage-1) + ')" ' + (logPage <= 1 ? 'disabled' : '') + '>&#8592; Prev</button>';
+
+  // Page numbers — show up to 7 around current
+  var lo = Math.max(1, logPage-3), hi = Math.min(pages, logPage+3);
+  if (lo > 1) paginHtml += '<button class="pag-btn" onclick="goPage(1)">1</button>' + (lo > 2 ? '<span class="pag-gap">…</span>' : '');
+  for (var p = lo; p <= hi; p++) {
+    paginHtml += '<button class="pag-btn' + (p === logPage ? ' pag-active' : '') + '" onclick="goPage(' + p + ')">' + p + '</button>';
+  }
+  if (hi < pages) paginHtml += (hi < pages-1 ? '<span class="pag-gap">…</span>' : '') + '<button class="pag-btn" onclick="goPage(' + pages + ')">' + pages + '</button>';
+
+  paginHtml += '<button class="pag-btn" onclick="goPage(' + (logPage+1) + ')" ' + (logPage >= pages ? 'disabled' : '') + '>Next &#8594;</button>'
+    + '</div>';
+
+  // Inject after table — use a wrapper div in the dash-card
+  var existing = document.getElementById('logPagination');
+  if (existing) { existing.innerHTML = paginHtml; }
+  else {
+    var wrap = document.createElement('div');
+    wrap.id  = 'logPagination';
+    wrap.innerHTML = paginHtml;
+    document.querySelector('.dash-card').appendChild(wrap);
+  }
 }

@@ -193,6 +193,19 @@ td:first-child { text-align: left; font-weight: 600; font-family: inherit; }
 .kpi-red   .kpi-value { color: var(--red);   }
 .kpi-gold  .kpi-value { color: var(--gold);  }
 
+/* Account summary row (full-width inside kpi-grid) */
+.kpi-row-account { display: contents; }
+.kpi-row-account .kpi-card { border-color: rgba(245,185,53,.25); }
+
+/* Pagination */
+.pagination { display: flex; align-items: center; gap: 4px; padding-top: 12px; flex-wrap: wrap; justify-content: flex-end; border-top: 1px solid var(--border2); margin-top: 4px; }
+.pag-info   { font-size: 11px; color: var(--muted); margin-right: 8px; flex: 1; }
+.pag-btn    { background: var(--surf2); border: 1px solid var(--border); color: var(--muted); font-size: 11px; padding: 4px 9px; border-radius: 5px; cursor: pointer; transition: all .12s; min-width: 32px; }
+.pag-btn:hover:not(:disabled) { color: var(--text); border-color: var(--blue); }
+.pag-btn:disabled { opacity: .35; cursor: default; }
+.pag-btn.pag-active { background: var(--gold-dim); border-color: var(--gold); color: var(--gold); font-weight: 700; }
+.pag-gap    { font-size: 11px; color: var(--dim); padding: 0 2px; }
+
 /* Charts */
 .chart-row  { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
 .chart-card { background: var(--surf); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
