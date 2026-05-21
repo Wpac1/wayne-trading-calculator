@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wayne's Sniper Entry Calculator</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="container">
+
+  <div class="header">
+    <h1>Sniper Entry Calculator <span id="totalPill" class="pill">0.03 lots</span></h1>
+  </div>
+  <div class="note">XAU/USD · $1 = 10 pips · Lock profit at partial closes · Risk adjusts automatically when locked in</div>
+
+  <div class="section">
+    <h3>Trade setup</h3>
+    <div class="field">
+      <label>Direction</label>
+      <select id="dir" onchange="calc()">
+        <option value="sell">Sell (short)</option>
+        <option value="buy">Buy (long)</option>
+      </select>
+    </div>
+    <div class="field"><label>ZAR / USD rate</label><input type="number" id="zar" value="18.5" step="0.1" oninput="calc()"></div>
+    <div class="field"><label>Entry price</label><input type="number" id="entry" value="4546" step="0.1" oninput="calc()"></div>
+    <div class="field"><label>Stop loss</label><input type="number" id="sl" value="4560" step="0.1" oninput="calc()"></div>
+  </div>
+
+  <div class="section">
+    <h3>Position size</h3>
+    <div class="slider-field">
+      <label>Lot size per position</label>
+      <input type="range" id="ls" min="0.01" max="0.10" step="0.01" value="0.01" oninput="calc()">
+      <span class="sv" id="lsVal">0.01</span>
+    </div>
+    <div class="slider-field">
+      <label>Number of positions</label>
+      <input type="range" id="np" min="1" max="20" step="1" value="3" oninput="calc()">
+      <span class="sv" id="npVal">3</span>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="tp-header">
+      <h3 style="margin:0">&#x1F512; Partial closes <span class="section-hint">tick to activate &middot; risk adjusts automatically</span></h3>
+      <button class="add-pc-btn" onclick="addPC()">+ Add close</button>
+    </div>
+    <div id="pcContainer"></div>
+    <div id="riskAdjustBox" style="display:none" class="risk-adjust-box">
+      <div class="risk-adjust-title">&#x26A1; Adjusted risk after partial closes</div>
+      <div class="risk-adjust-row"><span style="color:#666">Gross risk (full SL hit)</span><span id="adjGrossRisk" style="color:#e24b4a;font-weight:700">-</span></div>
+      <div class="risk-adjust-row"><span style="color:#666">Locked profit (offsets loss)</span><span id="adjLocked" style="color:#1d9e75;font-weight:700">-</span></div>
+      <div class="risk-adjust-row" style="border-top:1.5px solid #fac775;margin-top:6px;padding-top:6px"><span style="font-weight:700;color:#333">Net real risk</span><span id="adjNetRisk" style="font-weight:700;font-size:15px">-</span></div>
+      <div class="risk-adjust-row"><span style="color:#666">Net risk % of account</span><span id="adjNetPct" style="font-weight:600">-</span></div>
+    </div>
+    <div id="pcSummary" style="display:none;margin-top:10px;background:#f0faf5;border-radius:8px;padding:12px">
+      <div style="font-size:11px;font-weight:600;color:#27500a;margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em">&#x1F512; Locked in</div>
+      <div id="pcSummaryRows"></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="tp-header">
+      <h3 style="margin:0">Take profit levels <span id="remainingPill" class="pill" style="background:#eaf3de;color:#27500a">3 lots remaining</span></h3>
+      <div style="display:flex;gap:6px">
+        <button class="auto-btn" onclick="autoFill()">Auto-fill from SL</button>
+        <button class="add-btn" onclick="addTP()">+ Add TP</button>
+      </div>
+    </div>
+    <div id="tpContainer"></div>
+  </div>
+
+  <div class="results">
+    <div class="box" id="boxGrossRisk">
+      <div class="lbl">Gross risk (SL)</div>
+      <div class="num red" id="risk">-</div>
+      <div class="sub" id="riskSub">-</div>
+    </div>
+    <div class="box" id="boxNetRisk">
+      <div class="lbl">Net real risk</div>
+      <div class="num" id="netRisk" style="color:#e24b4a">-</div>
+      <div class="sub" id="netRiskSub">after locks</div>
+    </div>
+    <div class="box"><div class="lbl">Per $1 move (ZAR)</div><div class="num dark" id="perDollar">-</div><div class="sub">= 10 pips</div></div>
+    <div class="box"><div class="lbl">Locked profit</div><div class="num green" id="lockedProfit">R 0</div><div class="sub" id="lockedSub">0 lots closed</div></div>
+    <div class="box"><div class="lbl">TP profit (remaining)</div><div class="num green" id="tpProfit">-</div><div class="sub" id="tpProfitSub">-</div></div>
+    <div class="box"><div class="lbl">Total if all hit</div><div class="num green" id="totalProfit">-</div><div class="sub">locked + TP</div></div>
+  </div>
+
+  <div class="section">
+    <h3>Full breakdown</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Level</th><th>Price</th><th>$ move</th><th>Pips</th><th>Lots</th><th>Profit (R)</th><th>RRR</th></tr></thead>
+        <tbody id="tbl"></tbody>
+      </table>
+    </div>
+    <div id="verdict" class="verdict vg" style="margin-top:12px">&#x2713; Strong setup</div>
+  </div>
+
+  <div class="section">
+    <h3>Dollar move table</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>$ move</th><th>Pips</th><th>Per lot (R)</th><th>All lots (R)</th><th>RRR</th></tr></thead>
+        <tbody id="dollarTbl"></tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+<script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(New-Item *)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\Wpack\\\\wayne-trading-calculator\" -Recurse -File | ForEach-Object { $_.FullName + \"  \\(\" + $_.Length + \" bytes\\)\" })"
+    ]
+  }
+}

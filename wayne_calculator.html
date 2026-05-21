@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Wayne's Sniper Entry Calculator</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+  body { background: #f0eeea; min-height: 100vh; padding: 24px 16px; color: #111; }
+  .container { max-width: 700px; margin: 0 auto; }
+  .header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+  .header h1 { font-size: 20px; font-weight: 600; }
+  h3 { font-size: 14px; font-weight: 600; margin-bottom: 12px; color: #333; }
+  .section { background: white; border-radius: 12px; padding: 16px; margin-bottom: 12px; border: 0.5px solid #e0ddd6; }
+  .field { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .field:last-child { margin-bottom: 0; }
+  .field label { font-size: 13px; color: #666; }
+  .field input[type=number] { width: 120px; font-size: 14px; padding: 6px 8px; border: 1px solid #ccc; border-radius: 8px; text-align: right; background: #fafafa; color: #111; outline: none; }
+  .field input:focus { border-color: #378add; background: white; }
+  .field select { font-size: 13px; padding: 6px 8px; border: 1px solid #ccc; border-radius: 8px; background: #fafafa; color: #111; outline: none; }
+  .slider-field { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .slider-field label { font-size: 13px; color: #666; min-width: 160px; }
+  .slider-field input[type=range] { flex: 1; accent-color: #378add; }
+  .sv { font-size: 14px; font-weight: 700; min-width: 40px; text-align: right; }
+  .results { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+  .box { background: white; border-radius: 12px; padding: 12px; text-align: center; border: 0.5px solid #e0ddd6; transition: border-color 0.2s; }
+  .box .lbl { font-size: 11px; color: #888; margin-bottom: 4px; }
+  .box .num { font-size: 18px; font-weight: 700; }
+  .box .sub { font-size: 11px; color: #888; margin-top: 2px; }
+  .box.highlight { border-color: #1d9e75; background: #f0faf5; }
+  .red { color: #e24b4a; } .green { color: #1d9e75; } .amber { color: #ba7517; } .dark { color: #111; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: right; font-weight: 600; font-size: 11px; color: #888; padding: 5px 6px; border-bottom: 1px solid #eee; }
+  th:first-child { text-align: left; }
+  td { text-align: right; padding: 7px 6px; border-bottom: 1px solid #f5f5f5; }
+  td:first-child { text-align: left; font-weight: 600; }
+  .verdict { border-radius: 8px; padding: 10px 14px; font-size: 13px; font-weight: 600; margin-top: 10px; text-align: center; }
+  .vg { background: #eaf3de; color: #27500a; }
+  .vo { background: #faeeda; color: #633806; }
+  .vb { background: #fcebeb; color: #791f1f; }
+  .vfree { background: #e6f1fb; color: #0c447c; }
+  .pill { display: inline-block; background: #e6f1fb; color: #0c447c; font-size: 11px; padding: 2px 10px; border-radius: 99px; font-weight: 600; margin-left: 8px; }
+  .note { font-size: 11px; color: #888; background: #f5f5f3; border-radius: 8px; padding: 6px 10px; margin-bottom: 12px; }
+  .tp-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .tp-row label { font-size: 13px; font-weight: 600; color: #333; min-width: 40px; }
+  .tp-row input[type=number] { width: 100px; font-size: 13px; padding: 5px 8px; border: 1px solid #ccc; border-radius: 8px; text-align: right; background: #fafafa; color: #111; outline: none; }
+  .tp-row input:focus { border-color: #1d9e75; background: white; }
+  .tp-info { font-size: 11px; color: #888; flex: 1; text-align: center; }
+  .auto-btn { font-size: 11px; background: #e6f1fb; color: #0c447c; border: none; border-radius: 6px; padding: 4px 10px; cursor: pointer; font-weight: 600; }
+  .auto-btn:hover { background: #b5d4f4; }
+  .tp-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .add-btn { font-size: 12px; background: #eaf3de; color: #27500a; border: none; border-radius: 6px; padding: 4px 12px; cursor: pointer; font-weight: 600; }
+  .add-btn:hover { background: #c0dd97; }
+  .del-btn { font-size: 12px; background: #fcebeb; color: #791f1f; border: none; border-radius: 8px; padding: 4px 10px; cursor: pointer; font-weight: 700; }
+  .del-btn:hover { background: #f7c1c1; }
+  .pc-block { border-radius: 10px; padding: 12px; margin-bottom: 10px; border: 1.5px solid #e0ddd6; background: #fafafa; transition: all 0.2s; }
+  .pc-block.active { background: #fafdf7; border-color: #1d9e75; }
+  .pc-top { display: flex; align-items: center; gap: 10px; }
+  .pc-top input[type=checkbox] { width: 18px; height: 18px; accent-color: #1d9e75; cursor: pointer; flex-shrink: 0; }
+  .pc-label { font-size: 13px; font-weight: 600; color: #333; flex: 1; }
+  .pc-badge { font-size: 11px; padding: 2px 8px; border-radius: 99px; font-weight: 600; }
+  .pc-badge.on { background: #eaf3de; color: #27500a; }
+  .pc-badge.off { background: #f0f0ee; color: #888; }
+  .del-pc-btn { font-size: 11px; background: #fcebeb; color: #791f1f; border: none; border-radius: 6px; padding: 3px 8px; cursor: pointer; font-weight: 700; }
+  .pc-controls { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px; margin-top: 12px; }
+  .pc-col { display: flex; flex-direction: column; gap: 4px; }
+  .pc-col label { font-size: 11px; color: #888; }
+  .pc-col select { font-size: 13px; padding: 5px 8px; border: 1px solid #ccc; border-radius: 8px; background: white; color: #111; outline: none; width: 100%; }
+  .pc-col select:focus { border-color: #1d9e75; }
+  .pc-col .pc-result { font-size: 13px; font-weight: 700; color: #1d9e75; padding: 5px 8px; background: #eaf3de; border-radius: 8px; text-align: center; }
+  .pc-col .pc-price { font-size: 13px; font-weight: 600; color: #333; padding: 5px 8px; background: #f5f5f3; border-radius: 8px; text-align: center; }
+  .pc-disabled { opacity: 0.35; pointer-events: none; }
+  .add-pc-btn { font-size: 12px; background: #faeeda; color: #633806; border: none; border-radius: 6px; padding: 5px 14px; cursor: pointer; font-weight: 600; margin-top: 4px; }
+  .add-pc-btn:hover { background: #fac775; }
+  .sum-row { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid #e8f5ee; font-size: 13px; }
+  .sum-row:last-child { border-bottom: none; }
+  .risk-adjust-box { background: #fff8e6; border: 1.5px solid #fac775; border-radius: 10px; padding: 12px; margin-top: 10px; }
+  .risk-adjust-title { font-size: 12px; font-weight: 700; color: #633806; margin-bottom: 8px; }
+  .risk-adjust-row { display: flex; justify-content: space-between; font-size: 13px; padding: 4px 0; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="header">
+  <h1>Sniper Entry Calculator <span id="totalPill" class="pill">0.03 lots</span></h1>
+</div>
+<div class="note">XAU/USD · $1 = 10 pips · Lock profit at partial closes · Risk adjusts automatically when locked in</div>
+
+<div class="section">
+  <h3>Trade setup</h3>
+  <div class="field"><label>Direction</label>
+    <select id="dir" onchange="calc()">
+      <option value="sell">Sell (short)</option>
+      <option value="buy">Buy (long)</option>
+    </select>
+  </div>
+  <div class="field"><label>ZAR / USD rate</label><input type="number" id="zar" value="18.5" step="0.1" oninput="calc()"></div>
+  <div class="field"><label>Entry price</label><input type="number" id="entry" value="4546" step="0.1" oninput="calc()"></div>
+  <div class="field"><label>Stop loss</label><input type="number" id="sl" value="4560" step="0.1" oninput="calc()"></div>
+</div>
+
+<div class="section">
+  <h3>Position size</h3>
+  <div class="slider-field">
+    <label>Lot size per position</label>
+    <input type="range" id="ls" min="0.01" max="0.10" step="0.01" value="0.01" oninput="calc()">
+    <span class="sv" id="lsVal">0.01</span>
+  </div>
+  <div class="slider-field">
+    <label>Number of positions</label>
+    <input type="range" id="np" min="1" max="20" step="1" value="3" oninput="calc()">
+    <span class="sv" id="npVal">3</span>
+  </div>
+</div>
+
+<div class="section">
+  <div class="tp-header">
+    <h3 style="margin:0">🔒 Partial closes <span style="font-size:11px;color:#888;font-weight:400">— tick to activate · risk adjusts automatically</span></h3>
+    <button class="add-pc-btn" onclick="addPC()">+ Add close</button>
+  </div>
+  <div id="pcContainer"></div>
+  <div id="riskAdjustBox" style="display:none" class="risk-adjust-box">
+    <div class="risk-adjust-title">⚡ Adjusted risk after partial closes</div>
+    <div class="risk-adjust-row"><span style="color:#666">Gross risk (full SL hit)</span><span id="adjGrossRisk" style="color:#e24b4a;font-weight:700">-</span></div>
+    <div class="risk-adjust-row"><span style="color:#666">Locked profit (offsets loss)</span><span id="adjLocked" style="color:#1d9e75;font-weight:700">-</span></div>
+    <div class="risk-adjust-row" style="border-top:1.5px solid #fac775;margin-top:6px;padding-top:6px"><span style="font-weight:700;color:#333">Net real risk</span><span id="adjNetRisk" style="font-weight:700;font-size:15px">-</span></div>
+    <div class="risk-adjust-row"><span style="color:#666">Net risk % of account</span><span id="adjNetPct" style="font-weight:600">-</span></div>
+  </div>
+  <div id="pcSummary" style="display:none;margin-top:10px;background:#f0faf5;border-radius:8px;padding:12px">
+    <div style="font-size:11px;font-weight:600;color:#27500a;margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em">🔒 Locked in</div>
+    <div id="pcSummaryRows"></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="tp-header">
+    <h3 style="margin:0">Take profit levels <span id="remainingPill" class="pill" style="background:#eaf3de;color:#27500a">3 lots remaining</span></h3>
+    <div style="display:flex;gap:6px">
+      <button class="auto-btn" onclick="autoFill()">Auto-fill from SL</button>
+      <button class="add-btn" onclick="addTP()">+ Add TP</button>
+    </div>
+  </div>
+  <div id="tpContainer"></div>
+</div>
+
+<div class="results">
+  <div class="box" id="boxGrossRisk">
+    <div class="lbl">Gross risk (SL)</div>
+    <div class="num red" id="risk">-</div>
+    <div class="sub" id="riskSub">-</div>
+  </div>
+  <div class="box" id="boxNetRisk">
+    <div class="lbl">Net real risk</div>
+    <div class="num" id="netRisk" style="color:#e24b4a">-</div>
+    <div class="sub" id="netRiskSub">after locks</div>
+  </div>
+  <div class="box"><div class="lbl">Per $1 move (ZAR)</div><div class="num dark" id="perDollar">-</div><div class="sub">= 10 pips</div></div>
+  <div class="box"><div class="lbl">Locked profit</div><div class="num green" id="lockedProfit">R 0</div><div class="sub" id="lockedSub">0 lots closed</div></div>
+  <div class="box"><div class="lbl">TP profit (remaining)</div><div class="num green" id="tpProfit">-</div><div class="sub" id="tpProfitSub">-</div></div>
+  <div class="box"><div class="lbl">Total if all hit</div><div class="num green" id="totalProfit">-</div><div class="sub">locked + TP</div></div>
+</div>
+
+<div class="section">
+  <h3>Full breakdown</h3>
+  <table>
+    <thead><tr><th>Level</th><th>Price</th><th>$ move</th><th>Pips</th><th>Lots</th><th>Profit (R)</th><th>RRR</th></tr></thead>
+    <tbody id="tbl"></tbody>
+  </table>
+  <div id="verdict" class="verdict vg" style="margin-top:12px">✓ Strong setup</div>
+</div>
+
+<div class="section">
+  <h3>Dollar move table</h3>
+  <table>
+    <thead><tr><th>$ move</th><th>Pips</th><th>Per lot (R)</th><th>All lots (R)</th><th>RRR</th></tr></thead>
+    <tbody id="dollarTbl"></tbody>
+  </table>
+</div>
+
+<script>
+function g(id){ return document.getElementById(id); }
+function fz(n){ return 'R '+Math.round(Math.abs(n)).toLocaleString(); }
+
+var tps = [];
+var pcs = [];
+var ACCOUNT_BAL = 18000;
+var DOLLAR_OPTS = [1,2,3,4,5,6,7,8,10,12,15,20,25,30,40,50];
+
+function pipOpts(sel){
+  return DOLLAR_OPTS.map(function(d){
+    return '<option value="'+d+'"'+(d===sel?' selected':'')+'>$'+d+' ('+d*10+' pips)</option>';
+  }).join('');
+}
+function lotsOpts(sel,max){
+  var h='';
+  for(var i=1;i<=max;i++) h+='<option value="'+i+'"'+(i===sel?' selected':'')+'>'+i+' lot'+(i>1?'s':'')+'</option>';
+  return h;
+}
+function getPCPrice(pc){
+  var entry=parseFloat(g('entry').value)||4546;
+  var sign=g('dir').value==='sell'?-1:1;
+  return entry+sign*pc.dollar;
+}
+
+function renderPCs(){
+  var container=g('pcContainer');
+  container.innerHTML='';
+  var np=parseInt(g('np').value)||3;
+  var ls=parseFloat(g('ls').value)||0.01;
+  var zar=parseFloat(g('zar').value)||18.5;
+  var dollarPerLot=ls*100*zar;
+
+  pcs.forEach(function(pc,i){
+    var price=getPCPrice(pc);
+    var profit=pc.dollar*dollarPerLot*pc.lots;
+    var block=document.createElement('div');
+    block.className='pc-block'+(pc.enabled?' active':'');
+    block.innerHTML=
+      '<div class="pc-top">'
+        +'<input type="checkbox" '+(pc.enabled?'checked':'')+' onchange="togglePC('+i+',this.checked)">'
+        +'<span class="pc-label">'+pc.label+'</span>'
+        +'<span class="pc-badge '+(pc.enabled?'on':'off')+'">'+(pc.enabled?'🔒 +'+fz(profit):'Inactive')+'</span>'
+        +(pcs.length>1?'<button class="del-pc-btn" onclick="removePC('+i+')">✕</button>':'')
+      +'</div>'
+      +'<div class="pc-controls'+(pc.enabled?'':' pc-disabled')+'">'
+        +'<div class="pc-col"><label>Close at ($ move)</label><select onchange="updatePC('+i+',\'dollar\',this.value)">'+pipOpts(pc.dollar)+'</select></div>'
+        +'<div class="pc-col"><label>Price</label><div class="pc-price">'+price.toFixed(1)+'</div></div>'
+        +'<div class="pc-col"><label>Lots to close</label><select onchange="updatePC('+i+',\'lots\',this.value)">'+lotsOpts(pc.lots,np)+'</select></div>'
+        +'<div class="pc-col"><label>Profit locked</label><div class="pc-result">'+fz(profit)+'</div></div>'
+      +'</div>';
+    container.appendChild(block);
+  });
+
+  var activePCs=pcs.filter(function(p){ return p.enabled; });
+  if(activePCs.length>0){
+    g('pcSummary').style.display='block';
+    var total=0; var rows='';
+    activePCs.forEach(function(pc){
+      var profit=pc.dollar*dollarPerLot*pc.lots;
+      total+=profit;
+      rows+='<div class="sum-row"><span style="color:#666">'+pc.label+' — '+pc.lots+' lot'+(pc.lots>1?'s':'')+' @ $'+pc.dollar+' move ('+pc.dollar*10+' pips)</span><span style="font-weight:700;color:#1d9e75">+'+fz(profit)+'</span></div>';
+    });
+    rows+='<div class="sum-row" style="border-top:2px solid #c0dd97;margin-top:4px;padding-top:10px"><span style="font-weight:700">Total locked</span><span style="font-weight:700;color:#1d9e75;font-size:15px">+'+fz(total)+'</span></div>';
+    g('pcSummaryRows').innerHTML=rows;
+  } else {
+    g('pcSummary').style.display='none';
+  }
+}
+
+function togglePC(i,v){ pcs[i].enabled=v; calc(); }
+function updatePC(i,key,val){
+  if(key==='dollar') pcs[i].dollar=parseFloat(val)||5;
+  if(key==='lots')   pcs[i].lots=parseInt(val)||1;
+  calc();
+}
+function removePC(i){ pcs.splice(i,1); pcs.forEach(function(p,idx){ p.label='Close '+(idx+1); }); calc(); }
+function addPC(){
+  pcs.push({ enabled:false, dollar:5, lots:1, label:'Close '+(pcs.length+1) });
+  calc();
+}
+
+function renderTPs(rem,dollarPerLot,slDist,entry){
+  var container=g('tpContainer');
+  container.innerHTML='';
+  tps.forEach(function(tp,i){
+    var dist=Math.abs(tp.val-entry);
+    var profit=dist*dollarPerLot*rem;
+    var rrr=slDist>0?(dist/slDist).toFixed(1):'0';
+    var rrc=parseFloat(rrr)>=2?'#1d9e75':parseFloat(rrr)>=1.5?'#ba7517':'#e24b4a';
+    var row=document.createElement('div');
+    row.className='tp-row';
+    row.innerHTML='<label>'+tp.label+'</label>'
+      +'<input type="number" value="'+tp.val.toFixed(1)+'" step="0.1" onchange="updateTP('+i+',this.value)">'
+      +'<span class="tp-info">$'+dist.toFixed(1)+' · '+Math.round(dist*10)+' pips · '+fz(profit)+'</span>'
+      +'<span style="font-size:12px;font-weight:700;min-width:36px;text-align:right;color:'+rrc+'">1:'+rrr+'</span>'
+      +(tps.length>1?'<button class="del-btn" onclick="removeTP('+i+')">✕</button>':'<span style="width:38px"></span>');
+    container.appendChild(row);
+  });
+}
+
+function updateTP(i,val){ tps[i].val=parseFloat(val)||tps[i].val; calc(); }
+function addTP(){
+  var entry=parseFloat(g('entry').value)||4546;
+  var sl=parseFloat(g('sl').value)||4560;
+  var dir=g('dir').value;
+  var slDist=Math.abs(sl-entry);
+  var sign=dir==='sell'?-1:1;
+  var last=tps.length>0?tps[tps.length-1].val:entry;
+  tps.push({ val:parseFloat((last+sign*slDist).toFixed(1)), label:'TP'+(tps.length+1) });
+  calc();
+}
+function removeTP(i){ tps.splice(i,1); tps.forEach(function(tp,idx){ tp.label='TP'+(idx+1); }); calc(); }
+function autoFill(){
+  var entry=parseFloat(g('entry').value)||4546;
+  var sl=parseFloat(g('sl').value)||4560;
+  var dir=g('dir').value;
+  var slDist=Math.abs(sl-entry);
+  var sign=dir==='sell'?-1:1;
+  tps=[
+    { val:parseFloat((entry+sign*slDist*1.5).toFixed(1)), label:'TP1' },
+    { val:parseFloat((entry+sign*slDist*2).toFixed(1)),   label:'TP2' },
+    { val:parseFloat((entry+sign*slDist*3).toFixed(1)),   label:'TP3' },
+    { val:parseFloat((entry+sign*slDist*5).toFixed(1)),   label:'TP4' },
+  ];
+  calc();
+}
+
+function calc(){
+  var zar=parseFloat(g('zar').value)||18.5;
+  var dir=g('dir').value;
+  var entry=parseFloat(g('entry').value)||4546;
+  var sl=parseFloat(g('sl').value)||4560;
+  var ls=parseFloat(g('ls').value)||0.01;
+  var np=parseInt(g('np').value)||3;
+
+  g('lsVal').textContent=ls.toFixed(2);
+  g('npVal').textContent=np;
+  g('totalPill').textContent=(ls*np).toFixed(2)+' lots';
+
+  var slDist=Math.abs(sl-entry);
+  var slPips=Math.round(slDist*10);
+  var dollarPerLot=ls*100*zar;
+  var pipPerLot=dollarPerLot/10;
+  var grossRisk=slDist*dollarPerLot*np;
+
+  g('risk').textContent=fz(grossRisk);
+  g('riskSub').textContent='$'+slDist.toFixed(1)+' · '+slPips+' pips';
+  g('perDollar').textContent=fz(dollarPerLot*np);
+
+  // Partial close calcs
+  var activePCs=pcs.filter(function(p){ return p.enabled; });
+  var lockedLots=activePCs.reduce(function(s,p){ return s+p.lots; },0);
+  var lockedProfit=activePCs.reduce(function(s,p){ return s+p.dollar*dollarPerLot*p.lots; },0);
+  var remainingLots=Math.max(np-lockedLots,0);
+
+  // Adjusted risk = gross risk on remaining lots - locked profit
+  // If SL hits after lock-in: lose on remaining lots, but keep locked profit
+  var grossRiskRemaining = slDist*dollarPerLot*remainingLots;
+  var netRisk = Math.max(grossRiskRemaining - lockedProfit, 0);
+  var isFreeRide = lockedProfit >= grossRiskRemaining;
+  var netRiskPct = (netRisk/ACCOUNT_BAL*100).toFixed(2);
+
+  // Update net risk box
+  var netRiskEl=g('netRisk');
+  var boxNet=g('boxNetRisk');
+  if(activePCs.length>0){
+    if(isFreeRide){
+      netRiskEl.textContent='FREE RIDE';
+      netRiskEl.style.color='#0c447c';
+      netRiskEl.style.fontSize='14px';
+      boxNet.className='box highlight';
+      g('netRiskSub').textContent='locked > SL loss 🎉';
+    } else {
+      netRiskEl.textContent=fz(netRisk);
+      netRiskEl.style.color=netRisk<grossRisk/2?'#ba7517':'#e24b4a';
+      netRiskEl.style.fontSize='18px';
+      boxNet.className='box';
+      g('netRiskSub').textContent=netRiskPct+'% of account';
+    }
+    g('riskAdjustBox').style.display='block';
+    g('adjGrossRisk').textContent='-'+fz(grossRisk);
+    g('adjLocked').textContent='+'+fz(lockedProfit);
+    g('adjNetRisk').textContent=isFreeRide?'FREE RIDE 🎉 (R'+Math.round(lockedProfit-grossRiskRemaining).toLocaleString()+' guaranteed)':'-'+fz(netRisk);
+    g('adjNetRisk').style.color=isFreeRide?'#0c447c':netRisk<grossRisk/2?'#ba7517':'#e24b4a';
+    g('adjNetPct').textContent=isFreeRide?'0% — you cannot lose':netRiskPct+'%';
+  } else {
+    netRiskEl.textContent=fz(grossRisk);
+    netRiskEl.style.color='#e24b4a';
+    netRiskEl.style.fontSize='18px';
+    boxNet.className='box';
+    g('netRiskSub').textContent='no locks yet';
+    g('riskAdjustBox').style.display='none';
+  }
+
+  g('lockedProfit').textContent=fz(lockedProfit);
+  g('lockedSub').textContent=lockedLots+' lot'+(lockedLots!==1?'s':'')+' closed';
+  g('remainingPill').textContent=remainingLots+' lot'+(remainingLots!==1?'s':'')+' remaining';
+
+  renderPCs();
+  renderTPs(remainingLots,dollarPerLot,slDist,entry);
+
+  var bestTP=tps.length>0?tps[tps.length-1]:null;
+  var tpProfit=bestTP?Math.abs(bestTP.val-entry)*dollarPerLot*remainingLots:0;
+  var bestRRR=bestTP&&slDist>0?Math.abs(bestTP.val-entry)/slDist:0;
+  g('tpProfit').textContent=fz(tpProfit);
+  g('tpProfitSub').textContent=remainingLots+' lots to TP'+tps.length;
+  g('totalProfit').textContent=fz(lockedProfit+tpProfit);
+
+  // Breakdown table
+  var html='<tr style="background:#fff5f5">'
+    +'<td style="color:#e24b4a">Stop loss</td>'
+    +'<td style="color:#aaa">'+sl.toFixed(1)+'</td>'
+    +'<td style="color:#e24b4a">$'+slDist.toFixed(1)+'</td>'
+    +'<td style="color:#aaa">'+slPips+'</td>'
+    +'<td style="color:#aaa">'+np+'</td>'
+    +'<td style="color:#e24b4a;font-weight:700">-'+fz(grossRisk)+'</td>'
+    +'<td style="color:#e24b4a">gross</td>'
+    +'</tr>';
+
+  if(activePCs.length>0){
+    html+='<tr style="background:#fff8e6">'
+      +'<td style="color:#ba7517" colspan="5">Net real risk (after locks)</td>'
+      +'<td style="color:'+(isFreeRide?'#0c447c':netRisk<grossRisk/2?'#ba7517':'#e24b4a')+';font-weight:700">'+(isFreeRide?'FREE RIDE 🎉':'-'+fz(netRisk))+'</td>'
+      +'<td></td></tr>';
+  }
+
+  activePCs.forEach(function(pc){
+    var price=getPCPrice(pc);
+    var pips=pc.dollar*10;
+    var profit=pc.dollar*dollarPerLot*pc.lots;
+    var rrr=slDist>0?(pc.dollar/slDist).toFixed(1):'0';
+    html+='<tr style="background:#fafdf7">'
+      +'<td style="color:#1d9e75">🔒 '+pc.label+'</td>'
+      +'<td style="color:#aaa">'+price.toFixed(1)+'</td>'
+      +'<td style="color:#888">$'+pc.dollar+'</td>'
+      +'<td style="color:#aaa">'+pips+'</td>'
+      +'<td style="color:#1d9e75">'+pc.lots+'</td>'
+      +'<td style="color:#1d9e75;font-weight:700">+'+fz(profit)+'</td>'
+      +'<td style="color:#ba7517">1:'+rrr+'</td>'
+      +'</tr>';
+  });
+
+  tps.forEach(function(tp){
+    var dist=Math.abs(tp.val-entry);
+    var pips=Math.round(dist*10);
+    var profit=dist*dollarPerLot*remainingLots;
+    var rrr=slDist>0?(dist/slDist).toFixed(1):'0';
+    var rrc=parseFloat(rrr)>=2?'#1d9e75':parseFloat(rrr)>=1.5?'#ba7517':'#e24b4a';
+    html+='<tr style="background:#f0faf5">'
+      +'<td style="color:#1d9e75">🎯 '+tp.label+'</td>'
+      +'<td style="color:#aaa">'+tp.val.toFixed(1)+'</td>'
+      +'<td style="color:#888">$'+dist.toFixed(1)+'</td>'
+      +'<td style="color:#aaa">'+pips+'</td>'
+      +'<td style="color:#1d9e75">'+remainingLots+'</td>'
+      +'<td style="color:#1d9e75;font-weight:700">+'+fz(profit)+'</td>'
+      +'<td style="color:'+rrc+';font-weight:700">1:'+rrr+'</td>'
+      +'</tr>';
+  });
+
+  html+='<tr style="border-top:2px solid #e0e0e0;background:#f9f9f9">'
+    +'<td colspan="5" style="font-weight:700">Total (locked + best TP)</td>'
+    +'<td style="color:#1d9e75;font-weight:700;font-size:14px">+'+fz(lockedProfit+tpProfit)+'</td>'
+    +'<td></td></tr>';
+  g('tbl').innerHTML=html;
+
+  var verd=g('verdict');
+  if(isFreeRide){verd.className='verdict vfree';verd.textContent='🎉 Free ride — locked profit covers SL risk. You cannot lose on this trade!';}
+  else if(bestRRR>=2.5){verd.className='verdict vg';verd.textContent='✓ Strong setup — reward well above risk';}
+  else if(bestRRR>=1.5){verd.className='verdict vo';verd.textContent='⚠ Acceptable — consider widening TP';}
+  else{verd.className='verdict vb';verd.textContent='✗ Weak — RRR below 1.5, reconsider';}
+
+  var moves=[1,2,3,4,5,6,7,8,10,12,15,20,25,30,40,50];
+  var dhtml='';
+  moves.forEach(function(d){
+    var pips=d*10;
+    var perL=d*dollarPerLot;
+    var tot=perL*np;
+    var rrr=slDist>0?(d/slDist).toFixed(1):'0';
+    var rrc=parseFloat(rrr)>=2?'#1d9e75':parseFloat(rrr)>=1?'#ba7517':'#e24b4a';
+    var tags='';
+    tps.forEach(function(tp){ if(Math.abs(d-Math.abs(tp.val-entry))<0.3) tags+=' <span style="font-size:10px;background:#eaf3de;color:#27500a;padding:1px 6px;border-radius:99px">'+tp.label+'</span>'; });
+    activePCs.forEach(function(pc){ if(d===pc.dollar) tags+=' <span style="font-size:10px;background:#faeeda;color:#633806;padding:1px 6px;border-radius:99px">🔒</span>'; });
+    var hiSL=Math.abs(d-slDist)<0.3;
+    if(hiSL) tags+=' <span style="font-size:10px;background:#fcebeb;color:#791f1f;padding:1px 6px;border-radius:99px">SL</span>';
+    var bg=tags.includes('TP')?'background:#f0faf5;':tags.includes('🔒')?'background:#fafdf7;':hiSL?'background:#fff5f5;':'';
+    dhtml+='<tr style="'+bg+'">'
+      +'<td>$'+d+tags+'</td>'
+      +'<td style="color:#888">'+pips+'</td>'
+      +'<td style="color:#1d9e75">'+fz(perL)+'</td>'
+      +'<td style="color:#1d9e75;font-weight:700">'+fz(tot)+'</td>'
+      +'<td style="color:'+rrc+';font-weight:600">1:'+rrr+'</td>'
+      +'</tr>';
+  });
+  g('dollarTbl').innerHTML=dhtml;
+}
+
+addPC();
+autoFill();
+</script>
+</div>
+</body>
+</html>
