@@ -8,6 +8,11 @@ var logFilter   = 'all';
 var logPage     = 1;
 var LOG_PAGE_SZ = 10;
 
+var calYear    = 0;
+var calMonth   = 0;
+var calInited  = false;
+var MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
 // ── Tab switching ─────────────────────────────────────────────────────────────
 
 function showTab(tab) {
@@ -16,6 +21,7 @@ function showTab(tab) {
   document.querySelectorAll('.nav-tab').forEach(function(t) { t.classList.remove('active'); });
   document.getElementById('tab-' + tab).classList.add('active');
   if (tab === 'dashboard') initDashboard();
+  if (tab === 'calendar')  initCalendar();
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
@@ -182,6 +188,32 @@ function destroyCharts() {
 
 // ── Main render ───────────────────────────────────────────────────────────────
 
+var MOTIV_OTHERS = [
+  { q: 'The goal of a successful trader is to make the best trades. Money is secondary.', a: '— Alexander Elder' },
+  { q: 'Risk comes from not knowing what you\'re doing.', a: '— Warren Buffett' },
+  { q: 'It\'s not whether you\'re right or wrong, but how much you make when you\'re right and how much you lose when you\'re wrong.', a: '— George Soros' },
+  { q: 'The most important thing is to preserve capital. Profits will take care of themselves.', a: '— Paul Tudor Jones' },
+  { q: 'Plan the trade and trade the plan.', a: '— Ed Seykota' }
+];
+
+function renderMotivation() {
+  var existing = document.getElementById('motivCard');
+  if (existing) existing.remove();
+
+  var other = MOTIV_OTHERS[Math.floor(Math.random() * MOTIV_OTHERS.length)];
+  var html = '<div id="motivCard" class="motiv-card">'
+    + '<div class="motiv-label">&#x26A1; Mindset</div>'
+    + '<div class="motiv-quote">&ldquo;Dont give the market your Money. Wait and be patient. You need this!&rdquo;</div>'
+    + '<div class="motiv-attr">&mdash; Wayne</div>'
+    + '<hr class="motiv-sep">'
+    + '<div class="motiv-other-q">&ldquo;' + other.q + '&rdquo;</div>'
+    + '<div class="motiv-other-a">' + other.a + '</div>'
+    + '</div>';
+
+  var kpiGrid = document.getElementById('kpiGrid');
+  kpiGrid.insertAdjacentHTML('beforebegin', html);
+}
+
 function renderDashboard() {
   destroyCharts();
   logFilter = 'all';
@@ -189,6 +221,7 @@ function renderDashboard() {
   document.getElementById('dashContent').style.display = 'block';
   document.getElementById('dashLoader').style.display  = 'none';
 
+  renderMotivation();
   renderKPIs(stmtTrades);
   renderEquityChart(stmtTrades);
   renderDailyChart(stmtTrades);
@@ -524,4 +557,141 @@ function renderTradeLog(trades) {
     wrap.innerHTML = paginHtml;
     document.querySelector('.dash-card').appendChild(wrap);
   }
+}
+
+// ── P&L Calendar ──────────────────────────────────────────────────────────────
+
+function initCalendar() {
+  if (!stmtTrades || stmtTrades.length === 0) {
+    try {
+      var cached = JSON.parse(localStorage.getItem(STMT_KEY) || 'null');
+      if (cached && Array.isArray(cached.trades) && cached.trades.length > 0) {
+        stmtTrades  = cached.trades;
+        stmtSummary = cached.summary || {};
+      }
+    } catch(e) {}
+  }
+
+  if (!stmtTrades || stmtTrades.length === 0) {
+    document.getElementById('calNoData').style.display  = 'block';
+    document.getElementById('calContent').style.display = 'none';
+    return;
+  }
+
+  document.getElementById('calNoData').style.display  = 'none';
+  document.getElementById('calContent').style.display = 'block';
+
+  if (!calInited) {
+    calInited = true;
+    var latest = stmtTrades.reduce(function(a, b) {
+      return new Date(a.closeDate) > new Date(b.closeDate) ? a : b;
+    });
+    if (latest && latest.closeDate) {
+      var ld = new Date(latest.closeDate);
+      calYear  = ld.getFullYear();
+      calMonth = ld.getMonth();
+    } else {
+      var now = new Date();
+      calYear  = now.getFullYear();
+      calMonth = now.getMonth();
+    }
+  }
+
+  renderCalendar();
+}
+
+function calChangeMonth(dir) {
+  calMonth += dir;
+  if (calMonth < 0)  { calMonth = 11; calYear--; }
+  if (calMonth > 11) { calMonth = 0;  calYear++; }
+  renderCalendar();
+}
+
+function renderCalendar() {
+  document.getElementById('calMonthLabel').textContent = MONTH_NAMES[calMonth] + ' ' + calYear;
+
+  var byDay = {};
+  stmtTrades.forEach(function(t) {
+    if (!t.closeDate) return;
+    var d = new Date(t.closeDate);
+    if (d.getFullYear() !== calYear || d.getMonth() !== calMonth) return;
+    var key = d.getDate();
+    if (!byDay[key]) byDay[key] = { pl: 0, trades: 0, wins: 0, losses: 0 };
+    byDay[key].pl     += t.profit;
+    byDay[key].trades += 1;
+    if (t.profit > 0) byDay[key].wins++;
+    else byDay[key].losses++;
+  });
+
+  var firstDay    = new Date(calYear, calMonth, 1).getDay();
+  var daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+  var today       = new Date();
+
+  var html = '';
+  for (var i = 0; i < firstDay; i++) {
+    html += '<div class="cal-day cal-empty"></div>';
+  }
+
+  for (var d = 1; d <= daysInMonth; d++) {
+    var data    = byDay[d];
+    var isToday = (today.getFullYear() === calYear && today.getMonth() === calMonth && today.getDate() === d);
+    var todayCls = isToday ? ' cal-today' : '';
+
+    if (data) {
+      var win   = data.pl >= 0;
+      var cls   = 'cal-day ' + (win ? 'cal-win' : 'cal-loss') + todayCls;
+      var sign  = win ? '+' : '-';
+      var plStr = sign + 'R ' + Math.round(Math.abs(data.pl)).toLocaleString();
+      html += '<div class="' + cls + '">'
+        + '<div class="cal-dn">' + d + '</div>'
+        + '<div class="cal-tc">' + data.trades + ' trade' + (data.trades !== 1 ? 's' : '') + '</div>'
+        + '<div class="cal-pl">' + plStr + '</div>'
+        + '</div>';
+    } else {
+      html += '<div class="cal-day cal-blank' + todayCls + '"><div class="cal-dn">' + d + '</div></div>';
+    }
+  }
+
+  document.getElementById('calGrid').innerHTML = html;
+
+  var monthTrades = stmtTrades.filter(function(t) {
+    if (!t.closeDate) return false;
+    var cd = new Date(t.closeDate);
+    return cd.getFullYear() === calYear && cd.getMonth() === calMonth;
+  });
+
+  var sumEl = document.getElementById('calSummary');
+  if (monthTrades.length === 0) {
+    sumEl.innerHTML = '<div class="cal-no-trades">No trades in ' + MONTH_NAMES[calMonth] + ' ' + calYear + '</div>';
+    return;
+  }
+
+  var monthPL   = monthTrades.reduce(function(s, t) { return s + t.profit; }, 0);
+  var monthWins = monthTrades.filter(function(t) { return t.profit > 0; }).length;
+  var monthLoss = monthTrades.filter(function(t) { return t.profit <= 0; }).length;
+  var tradeDays = Object.keys(byDay).length;
+  var winDays   = Object.keys(byDay).filter(function(k) { return byDay[k].pl > 0; }).length;
+  var winRate   = monthTrades.length ? (monthWins / monthTrades.length * 100).toFixed(0) : 0;
+  var plSign    = monthPL >= 0 ? '+' : '';
+
+  sumEl.innerHTML = '<div class="cal-sum-grid">'
+    + '<div class="cal-sum-card ' + (monthPL >= 0 ? 'csum-green' : 'csum-red') + '">'
+    +   '<div class="cal-sum-lbl">Month P&amp;L</div>'
+    +   '<div class="cal-sum-val">' + plSign + 'R ' + Math.round(monthPL).toLocaleString() + '</div>'
+    + '</div>'
+    + '<div class="cal-sum-card">'
+    +   '<div class="cal-sum-lbl">Total Trades</div>'
+    +   '<div class="cal-sum-val">' + monthTrades.length + '</div>'
+    +   '<div class="cal-sum-sub">' + monthWins + 'W &middot; ' + monthLoss + 'L</div>'
+    + '</div>'
+    + '<div class="cal-sum-card ' + (parseFloat(winRate) >= 50 ? 'csum-green' : 'csum-red') + '">'
+    +   '<div class="cal-sum-lbl">Win Rate</div>'
+    +   '<div class="cal-sum-val">' + winRate + '%</div>'
+    + '</div>'
+    + '<div class="cal-sum-card">'
+    +   '<div class="cal-sum-lbl">Green Days</div>'
+    +   '<div class="cal-sum-val">' + winDays + ' / ' + tradeDays + '</div>'
+    +   '<div class="cal-sum-sub">trading days this month</div>'
+    + '</div>'
+    + '</div>';
 }

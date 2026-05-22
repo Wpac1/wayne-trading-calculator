@@ -170,6 +170,18 @@ td:first-child { text-align: left; font-weight: 600; font-family: inherit; }
 .trade-partials { margin-top: 10px; font-size: 12px; color: var(--muted); background: var(--green-dim); border-radius: 8px; padding: 8px 10px; border: 1px solid rgba(14,203,138,.15); }
 .trade-partials strong { color: var(--green); }
 .trade-verdict { margin-top: 8px; font-size: 12px; font-weight: 700; padding: 6px 12px; border-radius: 8px; text-align: center; border: 1px solid transparent; }
+.trade-note-ta { width: 100%; margin-top: 8px; background: var(--surf); border: 1px solid var(--border); border-radius: 7px; color: var(--text); font-size: 12px; padding: 7px 10px; resize: vertical; min-height: 38px; font-family: inherit; }
+.trade-note-ta:focus { outline: none; border-color: var(--blue); }
+.trade-status-bar { display: flex; gap: 6px; margin-top: 8px; }
+.status-btn { flex: 1; font-size: 11px; font-weight: 700; padding: 5px 0; border-radius: 7px; cursor: pointer; border: 1px solid var(--border); background: var(--surf); color: var(--muted); transition: all .15s; letter-spacing: .05em; }
+.status-btn:hover { color: var(--text); border-color: var(--dim); }
+.status-btn.win.active  { background: var(--green-dim); color: var(--green); border-color: rgba(14,203,138,.4); }
+.status-btn.loss.active { background: var(--red-dim);   color: var(--red);   border-color: rgba(246,79,87,.4); }
+.status-btn.be.active   { background: var(--gold-dim);  color: var(--gold);  border-color: rgba(245,185,53,.4); }
+.trade-status-badge { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 99px; }
+.trade-status-badge.win  { background: var(--green-dim); color: var(--green); border: 1px solid rgba(14,203,138,.3); }
+.trade-status-badge.loss { background: var(--red-dim);   color: var(--red);   border: 1px solid rgba(246,79,87,.3); }
+.trade-status-badge.be   { background: var(--gold-dim);  color: var(--gold);  border: 1px solid rgba(245,185,53,.3); }
 
 /* ── Dashboard ───────────────────────────────────────────────────────────── */
 .dash-topbar { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; flex-wrap: wrap; gap: 10px; }
@@ -177,6 +189,13 @@ td:first-child { text-align: left; font-weight: 600; font-family: inherit; }
 .dash-sub    { font-size: 12px; color: var(--muted); margin-top: 3px; }
 .dash-reload-btn { background: var(--surf2); border: 1px solid var(--border); color: var(--muted); font-size: 12px; padding: 7px 13px; border-radius: 7px; cursor: pointer; }
 .dash-reload-btn:hover { color: var(--text); border-color: var(--blue); }
+.motiv-card { background: var(--surf2); border: 1px solid rgba(245,185,53,.18); border-left: 3px solid var(--gold); border-radius: 10px; padding: 14px 18px; margin-bottom: 16px; }
+.motiv-label { font-size: 10px; font-weight: 700; color: var(--gold); letter-spacing: .1em; margin-bottom: 8px; text-transform: uppercase; }
+.motiv-quote { font-size: 14px; color: var(--text); font-style: italic; line-height: 1.55; }
+.motiv-attr  { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.motiv-sep   { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
+.motiv-other-q { font-size: 12px; color: var(--muted); font-style: italic; line-height: 1.45; }
+.motiv-other-a { font-size: 11px; color: var(--dim); margin-top: 3px; }
 .dash-file-btn { background: var(--blue-dim); border: 1px solid rgba(74,144,240,.3); color: var(--blue); font-size: 12px; padding: 7px 13px; border-radius: 7px; cursor: pointer; font-weight: 600; }
 .dash-loader { text-align: center; padding: 70px 20px; color: var(--muted); font-size: 14px; background: var(--surf); border-radius: 10px; border: 1px solid var(--border); margin-bottom: 12px; }
 .dash-loader-icon { font-size: 36px; margin-bottom: 14px; }
@@ -233,13 +252,129 @@ td:first-child { text-align: left; font-weight: 600; font-family: inherit; }
 .dir-sell { color: var(--red);   font-weight: 700; }
 .dir-buy  { color: var(--green); font-weight: 700; }
 
+/* ── P&L Calendar ────────────────────────────────────────────────────────── */
+.cal-container { max-width: 920px; }
+
+.cal-nav-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  margin-bottom: 20px;
+}
+.cal-month-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  min-width: 220px;
+  text-align: center;
+  letter-spacing: .02em;
+}
+.cal-arrow-btn {
+  background: var(--surf);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 18px;
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all .15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cal-arrow-btn:hover { color: var(--gold); border-color: var(--gold); }
+
+.cal-wrap {
+  background: var(--surf);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+.cal-dow-row {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.cal-dow {
+  text-align: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  padding: 4px 0;
+}
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+.cal-day {
+  aspect-ratio: 1;
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid transparent;
+  transition: border-color .15s, background .15s;
+  overflow: hidden;
+  min-height: 72px;
+}
+.cal-empty { background: transparent; border-color: transparent; pointer-events: none; }
+.cal-blank { background: var(--surf2); border-color: var(--border2); }
+.cal-blank .cal-dn { color: var(--dim); }
+.cal-win  { background: rgba(14,203,138,.08);  border-color: rgba(14,203,138,.28); }
+.cal-win:hover  { background: rgba(14,203,138,.15); border-color: rgba(14,203,138,.5); }
+.cal-loss { background: rgba(246,79,87,.08);   border-color: rgba(246,79,87,.28);  }
+.cal-loss:hover { background: rgba(246,79,87,.15);  border-color: rgba(246,79,87,.5);  }
+.cal-today { outline: 2px solid var(--gold); outline-offset: 1px; }
+
+.cal-dn { font-size: 11px; font-weight: 700; color: var(--muted); line-height: 1; }
+.cal-win .cal-dn, .cal-loss .cal-dn { color: var(--text); }
+.cal-tc { font-size: 10px; color: var(--muted); line-height: 1.2; }
+.cal-pl { font-size: 12px; font-weight: 700; font-family: var(--num-font); line-height: 1; margin-top: auto; }
+.cal-win .cal-pl  { color: var(--green); }
+.cal-loss .cal-pl { color: var(--red);   }
+
+.cal-no-trades {
+  text-align: center;
+  padding: 24px;
+  font-size: 13px;
+  color: var(--muted);
+  background: var(--surf);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+/* Calendar month summary */
+.cal-sum-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.cal-sum-card { background: var(--surf); border: 1px solid var(--border); border-radius: 10px; padding: 14px 12px; }
+.cal-sum-lbl  { font-size: 10px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin-bottom: 6px; }
+.cal-sum-val  { font-size: 22px; font-weight: 700; font-family: var(--num-font); color: var(--text); }
+.cal-sum-sub  { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.csum-green .cal-sum-val { color: var(--green); }
+.csum-red   .cal-sum-val { color: var(--red);   }
+
 /* ── Mobile ──────────────────────────────────────────────────────────────── */
 @media (max-width: 700px) {
-  .kpi-grid   { grid-template-columns: 1fr 1fr; }
-  .chart-row  { grid-template-columns: 1fr; }
+  .kpi-grid      { grid-template-columns: 1fr 1fr; }
+  .chart-row     { grid-template-columns: 1fr; }
   .chart-card.chart-wide { grid-column: 1; }
-  .topnav     { padding: 0 12px; }
-  .nav-meta   { display: none; }
+  .topnav        { padding: 0 12px; }
+  .nav-meta      { display: none; }
+  .cal-sum-grid  { grid-template-columns: 1fr 1fr; }
+  .cal-tc        { display: none; }
+  .cal-pl        { font-size: 10px; }
 }
 
 @media (max-width: 600px) {
@@ -256,4 +391,6 @@ td:first-child { text-align: left; font-weight: 600; font-family: inherit; }
 @media (max-width: 400px) {
   .slider-field { flex-wrap: wrap; }
   .slider-field label { min-width: 100%; }
+  .cal-dn { font-size: 9px; }
+  .cal-pl { font-size: 9px; }
 }

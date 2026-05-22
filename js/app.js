@@ -4,6 +4,13 @@ var tps = [];
 var pcs = [];
 var ACCOUNT_BAL = 18000;
 var DOLLAR_OPTS = [1,2,3,4,5,6,7,8,10,12,15,20,25,30,40,50];
+var INSTRUMENTS = {
+  'XAUUSD': { label: 'Gold (XAU/USD)',   multiplier: 100, pipsPerDollar: 10, pipLabel: 'pips' },
+  'US30':   { label: 'US30 / Dow Jones', multiplier: 1,   pipsPerDollar: 1,  pipLabel: 'pts'  },
+  'NAS100': { label: 'NAS100 / US Tech', multiplier: 1,   pipsPerDollar: 1,  pipLabel: 'pts'  },
+  'US500':  { label: 'US500 / S&P 500',  multiplier: 1,   pipsPerDollar: 1,  pipLabel: 'pts'  },
+};
+var INSTR = INSTRUMENTS['XAUUSD'];
 var STORAGE_KEY   = 'wayne_calc_v1';
 var TRADES_KEY    = 'wayne_trades_v1';
 
@@ -14,7 +21,8 @@ function fz(n) { return 'R ' + Math.round(Math.abs(n)).toLocaleString(); }
 
 function pipOpts(sel) {
   return DOLLAR_OPTS.map(function(d) {
-    return '<option value="' + d + '"' + (d === sel ? ' selected' : '') + '>$' + d + ' (' + d * 10 + ' pips)</option>';
+    var units = Math.round(d * INSTR.pipsPerDollar);
+    return '<option value="' + d + '"' + (d === sel ? ' selected' : '') + '>$' + d + ' (' + units + ' ' + INSTR.pipLabel + ')</option>';
   }).join('');
 }
 
@@ -34,6 +42,7 @@ function getPCPrice(pc) {
 
 function saveState() {
   var state = {
+    instr: g('instrument').value,
     dir:   g('dir').value,
     zar:   g('zar').value,
     entry: g('entry').value,
@@ -51,6 +60,7 @@ function loadState() {
     var raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return false;
     var s = JSON.parse(raw);
+    if (s.instr && INSTRUMENTS[s.instr]) g('instrument').value = s.instr;
     if (s.dir)   g('dir').value   = s.dir;
     if (s.zar)   g('zar').value   = s.zar;
     if (s.entry) g('entry').value = s.entry;
@@ -101,7 +111,7 @@ function renderPCs() {
     activePCs.forEach(function(pc) {
       var profit = pc.dollar * dollarPerLot * pc.lots;
       total += profit;
-      rows += '<div class="sum-row"><span style="color:#666">' + pc.label + ' — ' + pc.lots + ' lot' + (pc.lots > 1 ? 's' : '') + ' @ $' + pc.dollar + ' move (' + pc.dollar * 10 + ' pips)</span><span style="font-weight:700;color:#1d9e75">+' + fz(profit) + '</span></div>';
+      rows += '<div class="sum-row"><span style="color:#666">' + pc.label + ' — ' + pc.lots + ' lot' + (pc.lots > 1 ? 's' : '') + ' @ $' + pc.dollar + ' move (' + Math.round(pc.dollar * INSTR.pipsPerDollar) + ' ' + INSTR.pipLabel + ')</span><span style="font-weight:700;color:#1d9e75">+' + fz(profit) + '</span></div>';
     });
     rows += '<div class="sum-row" style="border-top:2px solid #c0dd97;margin-top:4px;padding-top:10px"><span style="font-weight:700">Total locked</span><span style="font-weight:700;color:#1d9e75;font-size:15px">+' + fz(total) + '</span></div>';
     g('pcSummaryRows').innerHTML = rows;
@@ -136,7 +146,7 @@ function renderTPs(rem, dollarPerLot, slDist, entry) {
     row.className = 'tp-row';
     row.innerHTML = '<label>' + tp.label + '</label>'
       + '<input type="number" value="' + tp.val.toFixed(1) + '" step="0.1" onchange="updateTP(' + i + ',this.value)">'
-      + '<span class="tp-info">$' + dist.toFixed(1) + ' &middot; ' + Math.round(dist * 10) + ' pips &middot; ' + fz(profit) + '</span>'
+      + '<span class="tp-info">$' + dist.toFixed(1) + ' &middot; ' + Math.round(dist * INSTR.pipsPerDollar) + ' ' + INSTR.pipLabel + ' &middot; ' + fz(profit) + '</span>'
       + '<span style="font-size:12px;font-weight:700;min-width:36px;text-align:right;color:' + rrc + '">1:' + rrr + '</span>'
       + (tps.length > 1 ? '<button class="del-btn" onclick="removeTP(' + i + ')">&#x2715;</button>' : '<span style="width:38px"></span>');
     container.appendChild(row);
@@ -173,6 +183,12 @@ function autoFill() {
 // ── Main calc ─────────────────────────────────────────────────────────────────
 
 function calc() {
+  var instrKey = g('instrument').value;
+  INSTR = INSTRUMENTS[instrKey] || INSTRUMENTS['XAUUSD'];
+  g('navMeta').textContent    = INSTR.label + ' · ZAR';
+  g('instrNote').textContent  = INSTR.label + ' · $1 = ' + INSTR.pipsPerDollar + ' ' + INSTR.pipLabel + ' · Lock profit at partial closes · Risk adjusts automatically when locked in';
+  g('perDollarSub').textContent = '= ' + INSTR.pipsPerDollar + ' ' + INSTR.pipLabel;
+
   var zar   = parseFloat(g('zar').value) || 18.5;
   var dir   = g('dir').value;
   var entry = parseFloat(g('entry').value) || 4546;
@@ -185,12 +201,12 @@ function calc() {
   g('totalPill').textContent = (ls * np).toFixed(2) + ' lots';
 
   var slDist      = Math.abs(sl - entry);
-  var slPips      = Math.round(slDist * 10);
-  var dollarPerLot = ls * 100 * zar;
+  var slPips      = Math.round(slDist * INSTR.pipsPerDollar);
+  var dollarPerLot = ls * INSTR.multiplier * zar;
   var grossRisk   = slDist * dollarPerLot * np;
 
   g('risk').textContent    = fz(grossRisk);
-  g('riskSub').textContent = '$' + slDist.toFixed(1) + ' · ' + slPips + ' pips';
+  g('riskSub').textContent = '$' + slDist.toFixed(1) + ' · ' + slPips + ' ' + INSTR.pipLabel;
   g('perDollar').textContent = fz(dollarPerLot * np);
 
   var activePCs      = pcs.filter(function(p) { return p.enabled; });
@@ -268,7 +284,7 @@ function calc() {
 
   activePCs.forEach(function(pc) {
     var price  = getPCPrice(pc);
-    var pips   = pc.dollar * 10;
+    var pips   = Math.round(pc.dollar * INSTR.pipsPerDollar);
     var profit = pc.dollar * dollarPerLot * pc.lots;
     var rrr    = slDist > 0 ? (pc.dollar / slDist).toFixed(1) : '0';
     html += '<tr style="background:rgba(14,203,138,.06)">'
@@ -284,7 +300,7 @@ function calc() {
 
   tps.forEach(function(tp) {
     var dist   = Math.abs(tp.val - entry);
-    var pips   = Math.round(dist * 10);
+    var pips   = Math.round(dist * INSTR.pipsPerDollar);
     var profit = dist * dollarPerLot * remainingLots;
     var rrr    = slDist > 0 ? (dist / slDist).toFixed(1) : '0';
     var rrc    = parseFloat(rrr) >= 2 ? '#0ecb8a' : parseFloat(rrr) >= 1.5 ? '#f5b935' : '#f64f57';
@@ -315,7 +331,7 @@ function calc() {
   var moves = [1,2,3,4,5,6,7,8,10,12,15,20,25,30,40,50];
   var dhtml = '';
   moves.forEach(function(d) {
-    var pips = d * 10;
+    var pips = Math.round(d * INSTR.pipsPerDollar);
     var perL = d * dollarPerLot;
     var tot  = perL * np;
     var rrr  = slDist > 0 ? (d / slDist).toFixed(1) : '0';
@@ -379,6 +395,7 @@ function saveTrade() {
 
   var trade = {
     id:            Date.now(),
+    status:        null,
     timestamp:     new Date().toLocaleString('en-ZA'),
     note:          note,
     direction:     dir,
@@ -449,11 +466,17 @@ function renderHistory() {
       ? t.takeProfits.map(function(tp) { return tp.label + ' ' + tp.price + ' (1:' + tp.rrr + ')'; }).join(' · ')
       : '—';
 
+    var statusBadge = t.status ? '<span class="trade-status-badge ' + t.status + '">' + t.status.toUpperCase() + '</span>' : '';
+    var winActive  = t.status === 'win'  ? ' active' : '';
+    var lossActive = t.status === 'loss' ? ' active' : '';
+    var beActive   = t.status === 'be'   ? ' active' : '';
+    var noteVal    = (t.note || '').replace(/"/g, '&quot;');
+
     return '<div class="trade-card">'
       + '<div class="trade-card-header">'
       +   '<span class="trade-ts">' + t.timestamp + '</span>'
       +   '<span class="trade-dir ' + t.direction + '">' + t.direction.toUpperCase() + '</span>'
-      +   '<span class="trade-note-text">' + (t.note || '') + '</span>'
+      +   statusBadge
       +   '<button class="trade-del-btn" onclick="deleteTrade(' + i + ')" title="Remove">&#x2715;</button>'
       + '</div>'
       + '<div class="trade-grid">'
@@ -461,14 +484,20 @@ function renderHistory() {
       +   '<div class="trade-stat"><div class="ts-lbl">Stop loss</div><div class="ts-val">' + t.sl + ' ($' + t.slDistance + ' / ' + t.slPips + ' pips)</div></div>'
       +   '<div class="trade-stat"><div class="ts-lbl">Lots</div><div class="ts-val">' + t.totalLots + ' (' + t.positions + ' &times; ' + t.lotSize + ')</div></div>'
       +   '<div class="trade-stat"><div class="ts-lbl">ZAR/USD</div><div class="ts-val">' + t.zarRate + '</div></div>'
-      +   '<div class="trade-stat"><div class="ts-lbl">Gross risk</div><div class="ts-val" style="color:#e24b4a">R ' + t.grossRisk.toLocaleString() + '</div></div>'
-      +   '<div class="trade-stat"><div class="ts-lbl">Net risk</div><div class="ts-val" style="color:' + (t.isFreeRide ? '#4a90f0' : '#f64f57') + '">' + (t.isFreeRide ? 'FREE RIDE' : 'R ' + t.netRisk.toLocaleString()) + '</div></div>'
-      +   '<div class="trade-stat"><div class="ts-lbl">Locked profit</div><div class="ts-val" style="color:#1d9e75">R ' + t.lockedProfit.toLocaleString() + '</div></div>'
+      +   '<div class="trade-stat"><div class="ts-lbl">Gross risk</div><div class="ts-val" style="color:var(--red)">R ' + t.grossRisk.toLocaleString() + '</div></div>'
+      +   '<div class="trade-stat"><div class="ts-lbl">Net risk</div><div class="ts-val" style="color:' + (t.isFreeRide ? 'var(--blue)' : 'var(--red)') + '">' + (t.isFreeRide ? 'FREE RIDE' : 'R ' + t.netRisk.toLocaleString()) + '</div></div>'
+      +   '<div class="trade-stat"><div class="ts-lbl">Locked profit</div><div class="ts-val" style="color:var(--green)">R ' + t.lockedProfit.toLocaleString() + '</div></div>'
       +   '<div class="trade-stat"><div class="ts-lbl">Best RRR</div><div class="ts-val">1:' + t.bestRRR + '</div></div>'
       + '</div>'
       + partialHtml
-      + '<div style="margin-top:8px;font-size:11px;color:#999">TPs: ' + tpHtml + '</div>'
+      + '<div style="margin-top:8px;font-size:11px;color:var(--muted)">TPs: ' + tpHtml + '</div>'
       + '<div class="trade-verdict ' + t.verdictClass + '">' + t.verdict + '</div>'
+      + '<textarea class="trade-note-ta" placeholder="Add notes..." onblur="updateTradeNote(' + i + ', this.value)">' + noteVal + '</textarea>'
+      + '<div class="trade-status-bar">'
+      +   '<button class="status-btn win' + winActive + '" onclick="updateTradeStatus(' + i + ',\'win\')">WIN</button>'
+      +   '<button class="status-btn loss' + lossActive + '" onclick="updateTradeStatus(' + i + ',\'loss\')">LOSS</button>'
+      +   '<button class="status-btn be' + beActive + '" onclick="updateTradeStatus(' + i + ',\'be\')">B/E</button>'
+      + '</div>'
       + '</div>';
   }).join('');
 }
@@ -476,6 +505,21 @@ function renderHistory() {
 function deleteTrade(i) {
   var trades = loadTrades();
   trades.splice(i, 1);
+  saveTrades(trades);
+  renderHistory();
+}
+
+function updateTradeNote(i, note) {
+  var trades = loadTrades();
+  if (!trades[i]) return;
+  trades[i].note = note.trim();
+  saveTrades(trades);
+}
+
+function updateTradeStatus(i, status) {
+  var trades = loadTrades();
+  if (!trades[i]) return;
+  trades[i].status = trades[i].status === status ? null : status;
   saveTrades(trades);
   renderHistory();
 }
