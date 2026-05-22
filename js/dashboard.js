@@ -8,6 +8,13 @@ var logFilter   = 'all';
 var logPage     = 1;
 var LOG_PAGE_SZ = 10;
 
+// Multi-account
+var activeAccount = 1;
+var acctPrefix    = 'R';
+var stmtTradesHF  = [];
+var stmtSummaryHF = {};
+var xlsxTrades    = [];
+
 var calYear    = 0;
 var calMonth   = 0;
 var calInited  = false;
@@ -27,11 +34,15 @@ function showTab(tab) {
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 function initDashboard() {
+  fetchXlsx();
+  if (activeAccount === 2 && xlsxTrades.length > 0) { renderDashboard(); return; }
   try {
     var cached = JSON.parse(localStorage.getItem(STMT_KEY) || 'null');
     if (cached && Array.isArray(cached.trades) && cached.trades.length > 0) {
       stmtTrades  = cached.trades;
       stmtSummary = cached.summary || {};
+      stmtTradesHF  = stmtTrades;
+      stmtSummaryHF = stmtSummary;
       renderDashboard();
       return;
     }
@@ -59,9 +70,11 @@ function reloadStatement() {
 }
 
 function handleFetched(html) {
-  var result  = parseStatement(html);
-  stmtTrades  = result.trades;
-  stmtSummary = result.summary;
+  var result    = parseStatement(html);
+  stmtTrades    = result.trades;
+  stmtSummary   = result.summary;
+  stmtTradesHF  = stmtTrades;
+  stmtSummaryHF = stmtSummary;
   cacheStmt();
   renderDashboard();
 }
@@ -71,9 +84,11 @@ function loadStatementFile(input) {
   if (!file) return;
   var reader = new FileReader();
   reader.onload = function(e) {
-    var result  = parseStatement(e.target.result);
-    stmtTrades  = result.trades;
-    stmtSummary = result.summary;
+    var result    = parseStatement(e.target.result);
+    stmtTrades    = result.trades;
+    stmtSummary   = result.summary;
+    stmtTradesHF  = stmtTrades;
+    stmtSummaryHF = stmtSummary;
     cacheStmt();
     document.getElementById('dashLoader').style.display = 'none';
     renderDashboard();
@@ -176,7 +191,7 @@ function fmtWeek(d) {
   return cd.getFullYear() + ' W' + p2(wk);
 }
 function p2(n) { return n < 10 ? '0'+n : ''+n; }
-function rZar(n) { return 'R ' + Math.round(Math.abs(n)).toLocaleString(); }
+function rZar(n) { return acctPrefix + ' ' + Math.round(Math.abs(n)).toLocaleString(); }
 
 // ── Chart cleanup ─────────────────────────────────────────────────────────────
 
@@ -214,10 +229,26 @@ function renderMotivation() {
   kpiGrid.insertAdjacentHTML('beforebegin', html);
 }
 
+function syncAcctTabs() {
+  document.querySelectorAll('.acct-tab').forEach(function(b) { b.classList.remove('active'); });
+  var el = document.getElementById('acct-tab-' + activeAccount);
+  if (el) el.classList.add('active');
+  var badge = document.getElementById('acct2badge');
+  if (badge) {
+    if (xlsxTrades.length > 0) {
+      badge.textContent = xlsxTrades.length + ' trades';
+      badge.style.display = 'inline';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+}
+
 function renderDashboard() {
   destroyCharts();
   logFilter = 'all';
   logPage   = 1;
+  syncAcctTabs();
   document.getElementById('dashContent').style.display = 'block';
   document.getElementById('dashLoader').style.display  = 'none';
 
@@ -319,7 +350,7 @@ function baseOpts(yFmt) {
         callbacks: {
           label: function(ctx) {
             var v = ctx.parsed.y !== undefined ? ctx.parsed.y : ctx.parsed;
-            return ' R ' + Math.round(v).toLocaleString();
+            return ' ' + acctPrefix + ' ' + Math.round(v).toLocaleString();
           }
         }
       }
@@ -559,6 +590,91 @@ function renderTradeLog(trades) {
   }
 }
 
+// ── Account 2 (XLSX) ──────────────────────────────────────────────────────────
+
+function fetchXlsx() {
+  if (typeof XLSX === 'undefined') return;
+  fetch('trading-activity.xlsx')
+    .then(function(r) { if (!r.ok) throw new Error(); return r.arrayBuffer(); })
+    .then(function(buf) {
+      var result  = parseXlsx(buf);
+      xlsxTrades  = result.trades;
+      syncAcctTabs();
+    })
+    .catch(function() {});
+}
+
+function pdXlsx(s) {
+  if (!s || s === '-') return null;
+  var d = new Date(String(s).replace(' ', 'T'));
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function parseXlsx(buffer) {
+  var wb   = XLSX.read(new Uint8Array(buffer), { type: 'array' });
+  var ws   = wb.Sheets[wb.SheetNames[0]];
+  var rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
+
+  var trades = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r         = rows[i];
+    var closeDate = r[1];
+    if (!closeDate || closeDate === '-') continue;
+
+    var profit = parseFloat(r[10]);
+    if (isNaN(profit)) continue;
+
+    var openD  = pdXlsx(String(r[0]));
+    var closeD = pdXlsx(String(closeDate));
+
+    // Action on close row is the closing direction; opening is opposite
+    var closeAction = r[4] ? r[4].toLowerCase() : 'sell';
+    var openType    = closeAction === 'sell' ? 'buy' : 'sell';
+
+    trades.push({
+      ticket:     String(r[2] || ''),
+      openTime:   r[0] ? String(r[0]) : '',
+      type:       openType,
+      size:       parseFloat(r[5]) || 0,
+      item:       r[3] ? String(r[3]).toLowerCase() : '',
+      openPrice:  parseFloat(r[6]) || 0,
+      sl:         0,
+      tp:         0,
+      closeTime:  String(closeDate),
+      closePrice: parseFloat(r[8]) || 0,
+      profit:     profit,
+      isSLHit:    false,
+      isWin:      profit > 0,
+      openDate:   openD  ? openD.toISOString()  : null,
+      closeDate:  closeD ? closeD.toISOString() : null,
+    });
+  }
+  return { trades: trades, summary: {} };
+}
+
+function setAccount(n) {
+  if (n === activeAccount) return;
+  activeAccount = n;
+  if (n === 2) {
+    stmtTrades  = xlsxTrades;
+    stmtSummary = {};
+    acctPrefix  = '$';
+    var sub = document.getElementById('dashSub');
+    if (sub) sub.textContent = 'Account 2 · trading-activity.xlsx · USD';
+  } else {
+    stmtTrades  = stmtTradesHF;
+    stmtSummary = stmtSummaryHF;
+    acctPrefix  = 'R';
+    var sub = document.getElementById('dashSub');
+    if (sub) sub.textContent = 'HF Markets SA · Account 69228294 · ZAR';
+  }
+  calInited = false;
+  destroyCharts();
+  logFilter = 'all';
+  logPage   = 1;
+  renderDashboard();
+}
+
 // ── P&L Calendar ──────────────────────────────────────────────────────────────
 
 function initCalendar() {
@@ -641,7 +757,7 @@ function renderCalendar() {
       var win   = data.pl >= 0;
       var cls   = 'cal-day ' + (win ? 'cal-win' : 'cal-loss') + todayCls;
       var sign  = win ? '+' : '-';
-      var plStr = sign + 'R ' + Math.round(Math.abs(data.pl)).toLocaleString();
+      var plStr = sign + acctPrefix + ' ' + Math.round(Math.abs(data.pl)).toLocaleString();
       html += '<div class="' + cls + '">'
         + '<div class="cal-dn">' + d + '</div>'
         + '<div class="cal-tc">' + data.trades + ' trade' + (data.trades !== 1 ? 's' : '') + '</div>'
@@ -677,7 +793,7 @@ function renderCalendar() {
   sumEl.innerHTML = '<div class="cal-sum-grid">'
     + '<div class="cal-sum-card ' + (monthPL >= 0 ? 'csum-green' : 'csum-red') + '">'
     +   '<div class="cal-sum-lbl">Month P&amp;L</div>'
-    +   '<div class="cal-sum-val">' + plSign + 'R ' + Math.round(monthPL).toLocaleString() + '</div>'
+    +   '<div class="cal-sum-val">' + plSign + acctPrefix + ' ' + Math.round(monthPL).toLocaleString() + '</div>'
     + '</div>'
     + '<div class="cal-sum-card">'
     +   '<div class="cal-sum-lbl">Total Trades</div>'

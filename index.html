@@ -6,6 +6,7 @@
   <title>Wayne Trading Terminal</title>
   <link rel="stylesheet" href="css/style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 
@@ -164,12 +165,17 @@
   <div class="dash-topbar">
     <div>
       <div class="dash-title">Trading Dashboard</div>
-      <div class="dash-sub">HF Markets SA &middot; Account 69228294 &middot; ZAR</div>
+      <div class="dash-sub" id="dashSub">HF Markets SA &middot; Account 69228294 &middot; ZAR</div>
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <button class="dash-reload-btn" onclick="reloadStatement()">&#x21BB; Reload</button>
       <label class="dash-file-btn">Browse file<input type="file" accept=".htm,.html" onchange="loadStatementFile(this)" style="display:none"></label>
     </div>
+  </div>
+
+  <div class="acct-row">
+    <button class="acct-tab active" id="acct-tab-1" onclick="setAccount(1)">HF Markets &mdash; ZAR</button>
+    <button class="acct-tab" id="acct-tab-2" onclick="setAccount(2)" id="acctTab2">Account 2 &mdash; USD <span id="acct2badge" class="acct-badge" style="display:none"></span></button>
   </div>
 
   <div id="dashLoader" style="display:none" class="dash-loader">

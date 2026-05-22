@@ -202,6 +202,13 @@ td:first-child { text-align: left; font-weight: 600; font-family: inherit; }
 .dash-loader-sub { font-size: 12px; margin-top: 8px; color: var(--dim); }
 .dash-loader code { color: var(--gold); }
 
+/* Account switcher */
+.acct-row { display: flex; gap: 6px; margin-bottom: 14px; }
+.acct-tab  { font-size: 12px; font-weight: 600; padding: 7px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--surf2); color: var(--muted); cursor: pointer; transition: all .15s; }
+.acct-tab:hover  { color: var(--text); border-color: var(--dim); }
+.acct-tab.active { background: var(--gold-dim); border-color: var(--gold); color: var(--gold); }
+.acct-badge { font-size: 10px; background: rgba(246,79,87,.15); color: var(--red); border-radius: 99px; padding: 1px 7px; margin-left: 6px; font-weight: 700; }
+
 /* KPI grid */
 .kpi-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; margin-bottom: 14px; }
 .kpi-card  { background: var(--surf); border: 1px solid var(--border); border-radius: 10px; padding: 14px 12px; }
