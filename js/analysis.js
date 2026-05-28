@@ -1676,7 +1676,7 @@ function calcMACD(closes, fast, slow, sigPeriod) {
 // ── Bot / Signals — state ─────────────────────────────────────────────────────
 var BOT_ENABLED    = false;
 var BOT_FEATURES   = { rangeDetect: true, rsiSignals: true, macdCross: true, swingFlags: true };
-var BOT_STRATEGIES = { rsiBounce: false, macdEntry: false, structBreak: false, rangeFade: false };
+var BOT_STRATEGIES = { rsiBounce: false, macdEntry: false, structBreak: false, rangeFade: false, asiaBreakout: false };
 var BOT_LOG        = [];
 var botOrderType   = localStorage.getItem('wayne_bot_order_type') || 'PENDING';
 var botLotSize     = parseFloat(localStorage.getItem('wayne_bot_lot_size') || '0.01') || 0.01;
@@ -2255,6 +2255,39 @@ function runBotScan() {
     } else if (price < rMid50 - rBand) {
       BOT_LOG.push({ time: now, strategy: 'Range Fade', signal: 'FADE BUY', dir: 'buy',
         entry: price, sl: price - slMove, tp: rMid50, detail: 'Near range bottom — target mid ' + rMid50.toFixed(2) });
+    }
+  }
+
+  if (BOT_STRATEGIES.asiaBreakout) {
+    var localHour    = new Date().getHours();
+    var inAsiaWindow = localHour >= 1 && localHour < 9;
+    var pipSz        = 0.01;          // XAUUSD: 1 pip = 0.01
+    var tpDist       = 50 * pipSz;    // 50 pips target
+    var minSlDist    = 25 * pipSz;    // 25 pip floor for SL
+
+    if (!inAsiaWindow) {
+      BOT_LOG.push({ time: now, strategy: 'Asia Breakout', signal: 'WAITING', dir: '—',
+        detail: 'Active 01:00–09:00 local · now ' + String(localHour).padStart(2, '0') + ':00' });
+    } else {
+      // Asian range from last 40 M15 bars (~10 hours)
+      var asiaBars  = ANA_RAW_M15 ? ANA_RAW_M15.slice(-40) : data.slice(-40);
+      var asiaHigh  = Math.max.apply(null, asiaBars.map(function(b){ return b.high; }));
+      var asiaLow   = Math.min.apply(null, asiaBars.map(function(b){ return b.low;  }));
+
+      if (price > asiaHigh) {
+        var slBuy = Math.min(asiaLow, price - minSlDist);
+        BOT_LOG.push({ time: now, strategy: 'Asia Breakout', signal: 'BULL BREAK', dir: 'buy',
+          entry: price, sl: slBuy, tp: price + tpDist,
+          detail: 'Break > Asia H ' + asiaHigh.toFixed(2) + ' · TP 50 pips · SL ' + slBuy.toFixed(2) });
+      } else if (price < asiaLow) {
+        var slSell = Math.max(asiaHigh, price + minSlDist);
+        BOT_LOG.push({ time: now, strategy: 'Asia Breakout', signal: 'BEAR BREAK', dir: 'sell',
+          entry: price, sl: slSell, tp: price - tpDist,
+          detail: 'Break < Asia L ' + asiaLow.toFixed(2) + ' · TP 50 pips · SL ' + slSell.toFixed(2) });
+      } else {
+        BOT_LOG.push({ time: now, strategy: 'Asia Breakout', signal: 'IN RANGE', dir: '—',
+          detail: 'H ' + asiaHigh.toFixed(2) + '  L ' + asiaLow.toFixed(2) + ' — waiting for break' });
+      }
     }
   }
 

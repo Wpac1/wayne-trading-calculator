@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Wayne Trading Terminal</title>
+  <title>Trading Terminal</title>
   <link rel="stylesheet" href="css/style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -16,6 +16,7 @@
     <button class="nav-tab active" id="tab-calculator" onclick="showTab('calculator')">Calculator</button>
     <button class="nav-tab" id="tab-dashboard" onclick="showTab('dashboard')">Dashboard</button>
     <button class="nav-tab" id="tab-calendar" onclick="showTab('calendar')">P&amp;L Calendar</button>
+    <button class="nav-tab" id="tab-analysis" onclick="showTab('analysis')">Analysis Lab</button>
   </div>
   <div class="nav-meta" id="navMeta">XAU/USD &middot; ZAR</div>
 </nav>
@@ -165,27 +166,38 @@
   <div class="dash-topbar">
     <div>
       <div class="dash-title">Trading Dashboard</div>
-      <div class="dash-sub" id="dashSub">HF Markets SA &middot; Account 69228294 &middot; ZAR</div>
+      <div class="dash-sub" id="dashSub">Account 1 &middot; ZAR</div>
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <span id="syncStatus" style="font-size:11px;color:var(--muted)"></span>
+      <button class="dash-sync-btn" id="syncBtn" onclick="syncMT4()">&#x21A7; Sync MT4</button>
       <button class="dash-reload-btn" onclick="reloadStatement()">&#x21BB; Reload</button>
-      <label class="dash-file-btn">Browse file<input type="file" accept=".htm,.html" onchange="loadStatementFile(this)" style="display:none"></label>
+      <label class="dash-file-btn">Browse file<input type="file" accept=".csv,.htm,.html" onchange="loadStatementFile(this)" style="display:none"></label>
     </div>
   </div>
 
   <div class="acct-row">
-    <button class="acct-tab active" id="acct-tab-1" onclick="setAccount(1)">HF Markets &mdash; ZAR</button>
+    <button class="acct-tab active" id="acct-tab-1" onclick="setAccount(1)">Account 1 &mdash; ZAR</button>
     <button class="acct-tab" id="acct-tab-2" onclick="setAccount(2)" id="acctTab2">Account 2 &mdash; USD <span id="acct2badge" class="acct-badge" style="display:none"></span></button>
   </div>
 
   <div id="dashLoader" style="display:none" class="dash-loader">
     <div class="dash-loader-icon">&#x1F4C2;</div>
-    <div>Could not auto-load <code>DetailedStatement.htm</code></div>
-    <div class="dash-loader-sub">Place the file in the project folder, or use Browse to load it manually</div>
+    <div>No statement loaded &mdash; run <strong>&#x21A7; Sync MT4</strong> or Browse a file</div>
+    <div class="dash-loader-sub">Sync copies <code>WayneStatement.csv</code> from MT4 &middot; Browse accepts <code>.csv</code> or <code>.htm</code></div>
   </div>
 
   <div id="dashContent" style="display:none">
     <div class="kpi-grid" id="kpiGrid"></div>
+
+    <!-- System category badges -->
+    <div class="sys-cat-section" id="sysCatSection" style="display:none">
+      <div class="sys-cat-header">
+        <span class="sys-cat-title">System Categories</span>
+        <span class="sys-cat-hint">Click a badge to filter the trade log</span>
+      </div>
+      <div id="sysCategoryBadges" class="sys-cat-row"></div>
+    </div>
 
     <div class="chart-row">
       <div class="chart-card chart-wide">
@@ -227,6 +239,7 @@
             <tr>
               <th>Ticket</th><th>Open</th><th>Close</th><th>Dir</th><th>Symbol</th>
               <th>Lots</th><th>Entry</th><th>Exit</th><th>SL</th><th>Result</th><th>Profit (R)</th>
+              <th>System</th>
             </tr>
           </thead>
           <tbody id="tradeLogBody"></tbody>
@@ -234,6 +247,23 @@
       </div>
     </div>
   </div><!-- /dashContent -->
+
+  <!-- Flag-as-system modal -->
+  <div id="flagModal" class="flag-modal" style="display:none" onclick="if(event.target===this)cancelFlagModal()">
+    <div class="flag-modal-box">
+      <div class="flag-modal-head">Flag as System Trade</div>
+      <div class="flag-modal-sub">Ticket <strong id="flagModalTicket"></strong></div>
+      <input type="hidden" id="flagModalTicketVal">
+      <label class="flag-modal-lbl">Comment / Model</label>
+      <input type="text" id="flagModalComment" list="commentSuggestions" class="flag-modal-input" placeholder="e.g. MACD cross strategy, Bot v1" autocomplete="off">
+      <datalist id="commentSuggestions"></datalist>
+      <div id="flagCommentChips" class="flag-comment-chips"></div>
+      <div class="flag-modal-btns">
+        <button class="flag-modal-cancel" onclick="cancelFlagModal()">Cancel</button>
+        <button class="flag-modal-save"   onclick="saveFlaggedTrade()">&#10003; Flag Trade</button>
+      </div>
+    </div>
+  </div>
 
 </div>
 </div><!-- /view-dashboard -->
@@ -281,7 +311,296 @@
 </div>
 </div><!-- /view-calendar -->
 
+<!-- ── ANALYSIS VIEW ──────────────────────────────────────────────────────── -->
+<div id="view-analysis" class="view">
+<div class="ana-neon-wrap">
+
+  <!-- Topbar -->
+  <div class="ana-neon-topbar">
+    <div>
+      <div class="ana-neon-title">&#9670; ANALYSIS LAB &mdash; XAU/USD</div>
+      <div class="ana-neon-sub">S/R Zones &middot; Trend &middot; Patterns &middot; Fibonacci &middot; Trade Deal Scorer</div>
+    </div>
+    <div class="ana-neon-meta">
+      <span id="anaSessionBadge" class="ana-session-badge sess-asian">ASIAN</span>
+      <span id="anaClock" class="ana-clock">00:00:00</span>
+      <button class="ana-sync-btn" id="anaSyncBtn" onclick="syncAnalysis()">&#8635; Sync MT4</button>
+    </div>
+  </div>
+
+  <!-- Interval + bars toolbar -->
+  <div class="ana-toolbar">
+    <span class="ana-tb-label">TF:</span>
+    <button class="ana-itvl-btn active" id="itvl-M15"  onclick="setAnaInterval('M15')">M15</button>
+    <button class="ana-itvl-btn"        id="itvl-H1"   onclick="setAnaInterval('H1')">H1</button>
+    <button class="ana-itvl-btn"        id="itvl-H4"   onclick="setAnaInterval('H4')">H4</button>
+    <button class="ana-itvl-btn"        id="itvl-D1"   onclick="setAnaInterval('D1')">D1</button>
+    <div class="ana-toolbar-sep"></div>
+    <span class="ana-tb-label">Bars:</span>
+    <button class="ana-bars-btn"        id="bars-100"  onclick="setAnaBars(100)">100</button>
+    <button class="ana-bars-btn active" id="bars-200"  onclick="setAnaBars(200)">200</button>
+    <button class="ana-bars-btn"        id="bars-500"  onclick="setAnaBars(500)">500</button>
+  </div>
+
+  <!-- Symbol selector + view toggle -->
+  <div class="ana-sym-row">
+    <span class="ana-tb-label">Symbol:</span>
+    <div class="ana-sym-chips" id="anaSymbolChips">
+      <span style="color:var(--muted);font-size:11px;opacity:.6">Loading symbols…</span>
+    </div>
+    <div class="ana-toolbar-sep"></div>
+    <button class="ana-view-btn active" id="viewSingle" onclick="setAnaView('single')">Single</button>
+    <button class="ana-view-btn"        id="viewMulti"  onclick="setAnaView('multi')">Multi</button>
+  </div>
+
+  <!-- Multi-symbol grid (shown when view = multi) -->
+  <div id="anaMultiGrid" class="ana-multi-grid" style="display:none"></div>
+
+  <!-- Status box (loading / error) -->
+  <div id="anaStatus" class="ana-status-box" style="display:none">
+    <div id="anaStatusIcon"  class="ana-status-icon">&#x23F3;</div>
+    <div id="anaStatusTitle" class="ana-status-title">Loading data&hellip;</div>
+    <div id="anaStatusSub"   class="ana-status-sub"></div>
+  </div>
+
+  <!-- Content shown after data loads -->
+  <div id="anaContent" style="display:none">
+
+    <!-- KPIs -->
+    <div class="ana-neon-kpi-grid" id="anaKpis"></div>
+
+    <!-- Chart area + sidebar -->
+    <div class="ana-neon-chart-row">
+      <!-- Charts column (1 or 2 canvases) -->
+      <div class="ana-neon-charts-col" id="anaChartsCol">
+        <div class="ana-neon-canvas-wrap" id="anaMainWrap">
+          <div class="ana-canvas-label" id="anaMainLabel">
+            PRICE CHART
+            <span class="leg"><span class="leg-dot" style="background:#00e5ff"></span>EMA20</span>
+            <span class="leg"><span class="leg-dot" style="background:#f5b935"></span>EMA50</span>
+            <span class="leg"><span class="leg-dot" style="background:#f64f57"></span>EMA200</span>
+          </div>
+          <canvas id="anaChart" style="height:340px"></canvas>
+        </div>
+        <div class="ana-neon-canvas-wrap" id="anaCtxWrap" style="display:none">
+          <div class="ana-canvas-label" id="anaCtxLabel">CONTEXT</div>
+          <canvas id="anaChartCtx" style="height:180px"></canvas>
+        </div>
+      </div>
+
+      <!-- Sidebar -->
+      <div class="ana-neon-sidebar">
+        <!-- Key Levels -->
+        <div class="ana-neon-card">
+          <div class="ana-neon-card-head">Key Levels <span style="font-size:9px;color:var(--muted);text-transform:none;letter-spacing:0">str / touches / dist</span></div>
+          <div class="ana-neon-sr-list" id="anaSrList"></div>
+        </div>
+        <!-- Trend -->
+        <div class="ana-neon-card">
+          <div class="ana-neon-card-head">Trend Analysis</div>
+          <div id="anaTrend"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Patterns + Fibonacci -->
+    <div class="ana-neon-bottom-row">
+      <div class="ana-neon-card">
+        <div class="ana-neon-card-head">Pattern Scanner <span id="anaPatternCount" class="pill" style="margin-left:0"></span></div>
+        <div id="anaPatterns"></div>
+      </div>
+      <div class="ana-neon-card">
+        <div class="ana-neon-card-head">Fibonacci Retracements</div>
+        <div id="anaFib"></div>
+      </div>
+    </div>
+
+    <!-- Deal Scorer -->
+    <div class="ana-neon-card">
+      <div class="ana-neon-card-head">
+        Trade Deal Scorer
+        <span style="font-size:10px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">Enter your setup. Get the verdict.</span>
+      </div>
+      <div class="ana-neon-scorer-wrap">
+        <div class="ana-neon-scorer-inputs">
+          <div class="field">
+            <label>Direction</label>
+            <select id="scDir" onchange="runDealScore()">
+              <option value="buy">Buy (Long)</option>
+              <option value="sell">Sell (Short)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Entry price</label>
+            <input type="number" id="scEntry" step="0.1" placeholder="e.g. 3280" oninput="runDealScore()">
+          </div>
+          <div class="field">
+            <label>Stop loss</label>
+            <input type="number" id="scSL" step="0.1" placeholder="e.g. 3250" oninput="runDealScore()">
+          </div>
+          <div class="field">
+            <label>Take profit</label>
+            <input type="number" id="scTP" step="0.1" placeholder="e.g. 3370" oninput="runDealScore()">
+          </div>
+          <div id="anaCurrentPrice" class="ana-cur-price"></div>
+        </div>
+        <div id="scResult" class="ana-score-result">
+          <div class="ana-score-empty">Fill in your trade setup above to get scored</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bot / Signals -->
+    <div class="ana-neon-card" id="botSignalsCard">
+      <div class="ana-neon-card-head">
+        Bot &amp; Signals
+        <div class="bot-tabs">
+          <button class="bot-tab active" id="botTabSignals" onclick="showBotTab('signals')">Signals</button>
+          <button class="bot-tab"        id="botTabBot"     onclick="showBotTab('bot')">Bot Engine</button>
+        </div>
+      </div>
+
+      <!-- ── SIGNALS TAB ─────────────────────────────────────────────────── -->
+      <div id="botPanelSignals">
+        <div class="sig-form-row">
+          <select id="sigDir" class="sig-input">
+            <option value="buy">Buy</option>
+            <option value="sell">Sell</option>
+          </select>
+          <input  type="number" id="sigEntry" class="sig-input" placeholder="Entry" step="0.01">
+          <input  type="number" id="sigSL"    class="sig-input" placeholder="SL"    step="0.01">
+          <input  type="number" id="sigTP"    class="sig-input" placeholder="TP"    step="0.01">
+          <input  type="text"   id="sigBasis" class="sig-input sig-input-wide" placeholder="Basis (e.g. H4 structure)">
+          <input  type="text"   id="sigNote"  class="sig-input sig-input-wide" placeholder="Note">
+          <button class="sig-log-btn" onclick="logSignal()">&#43; Log Signal</button>
+        </div>
+        <div class="sig-table-wrap">
+          <table class="sig-table">
+            <thead>
+              <tr>
+                <th>Time</th><th>Symbol</th><th>Dir</th><th>Entry</th>
+                <th>SL</th><th>TP</th><th>Basis</th><th>Status</th><th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="sigTableBody">
+              <tr><td colspan="9" class="sig-empty">No signals logged yet</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ── BOT ENGINE TAB ──────────────────────────────────────────────── -->
+      <div id="botPanelBot" style="display:none">
+
+        <!-- Master switch row -->
+        <div class="bot-master-row">
+          <span class="bot-master-lbl">Bot Engine</span>
+          <label class="bot-toggle">
+            <input type="checkbox" id="botMasterSwitch" onchange="toggleBotMaster(this.checked)">
+            <span class="bot-toggle-track"><span class="bot-toggle-thumb"></span></span>
+          </label>
+          <span id="botMasterStatus" class="bot-status-badge bot-status-off">OFF</span>
+          <div class="bot-sl-wrap" title="Override SL distance (pts). Leave blank = 1× ATR">
+            <span class="bot-sl-lbl">SL pts</span>
+            <input type="number" id="botSlPts" class="bot-sl-input" placeholder="ATR" step="1" min="1">
+          </div>
+          <div class="bot-lot-wrap" title="Lot size for MT4 orders">
+            <span class="bot-lot-lbl">Lot</span>
+            <input type="number" id="botLotInput" class="bot-lot-input" value="0.01" step="0.01" min="0.01" onchange="setBotLotSize(this.value)">
+          </div>
+          <div id="botOrderTypeWrap" class="bot-order-type-wrap" style="display:none">
+            <button id="botOrdPending" class="bot-ord-btn active" onclick="setBotOrderType('PENDING')" title="Pending limit order at entry price">LMT</button>
+            <button id="botOrdMarket"  class="bot-ord-btn"        onclick="setBotOrderType('MARKET')"  title="Market order at current price">MKT</button>
+          </div>
+          <button class="bot-scan-btn" onclick="runBotScan()">&#9650; Scan Now</button>
+          <button class="bot-test-btn" onclick="testBotSignal()" title="Fire a test signal: LMT 4500 SL 4490 TP 4550">&#9889; Test</button>
+        </div>
+
+        <!-- Default Features -->
+        <div class="bot-section-head">Default Features</div>
+        <div class="bot-features">
+          <div class="bot-feat-row">
+            <label class="bot-toggle"><input type="checkbox" checked onchange="setBotFeature('rangeDetect',this.checked)"><span class="bot-toggle-track"><span class="bot-toggle-thumb"></span></span></label>
+            <div class="bot-feat-info"><span class="bot-feat-name">Range Detection</span><span class="bot-feat-desc">ATR percentile — identifies ranging vs trending market</span></div>
+          </div>
+          <div class="bot-feat-row">
+            <label class="bot-toggle"><input type="checkbox" checked onchange="setBotFeature('rsiSignals',this.checked)"><span class="bot-toggle-track"><span class="bot-toggle-thumb"></span></span></label>
+            <div class="bot-feat-info"><span class="bot-feat-name">RSI Signals</span><span class="bot-feat-desc">Flag overbought (&gt;70) and oversold (&lt;30) conditions</span></div>
+          </div>
+          <div class="bot-feat-row">
+            <label class="bot-toggle"><input type="checkbox" checked onchange="setBotFeature('macdCross',this.checked)"><span class="bot-toggle-track"><span class="bot-toggle-thumb"></span></span></label>
+            <div class="bot-feat-info"><span class="bot-feat-name">MACD Cross</span><span class="bot-feat-desc">12/26/9 — detect bull and bear crossovers</span></div>
+          </div>
+          <div class="bot-feat-row">
+            <label class="bot-toggle"><input type="checkbox" checked onchange="setBotFeature('swingFlags',this.checked)"><span class="bot-toggle-track"><span class="bot-toggle-thumb"></span></span></label>
+            <div class="bot-feat-info"><span class="bot-feat-name">Swing H/L Flags</span><span class="bot-feat-desc">Mark most recent swing high and swing low</span></div>
+          </div>
+        </div>
+
+        <!-- Strategy Vault -->
+        <div class="bot-section-head">Strategy Vault <span class="bot-vault-sub">Toggle strategies to auto-generate setups</span></div>
+        <div class="bot-vault">
+          <div class="bot-vault-row">
+            <label class="bot-toggle"><input type="checkbox" onchange="setBotStrategy('rsiBounce',this.checked)"><span class="bot-toggle-track"><span class="bot-toggle-thumb"></span></span></label>
+            <div class="bot-feat-info"><span class="bot-feat-name">RSI Bounce</span><span class="bot-feat-desc">Buy oversold in ranging market — 2R target off swing low</span></div>
+          </div>
+          <div class="bot-vault-row">
+            <label class="bot-toggle"><input type="checkbox" onchange="setBotStrategy('macdEntry',this.checked)"><span class="bot-toggle-track"><span class="bot-toggle-thumb"></span></span></label>
+            <div class="bot-feat-info"><span class="bot-feat-name">MACD Cross Entry</span><span class="bot-feat-desc">Trade in direction of MACD crossover — 2R ATR-based SL/TP</span></div>
+          </div>
+          <div class="bot-vault-row">
+            <label class="bot-toggle"><input type="checkbox" onchange="setBotStrategy('structBreak',this.checked)"><span class="bot-toggle-track"><span class="bot-toggle-thumb"></span></span></label>
+            <div class="bot-feat-info"><span class="bot-feat-name">Structure Break</span><span class="bot-feat-desc">Trade breakout of swing H/L with confirmed HH/HL or LH/LL</span></div>
+          </div>
+          <div class="bot-vault-row">
+            <label class="bot-toggle"><input type="checkbox" onchange="setBotStrategy('rangeFade',this.checked)"><span class="bot-toggle-track"><span class="bot-toggle-thumb"></span></span></label>
+            <div class="bot-feat-info"><span class="bot-feat-name">Range Fade</span><span class="bot-feat-desc">Fade extremes in ranging market — target midpoint of 50-bar range</span></div>
+          </div>
+          <div class="bot-vault-row">
+            <label class="bot-toggle"><input type="checkbox" onchange="setBotStrategy('asiaBreakout',this.checked)"><span class="bot-toggle-track"><span class="bot-toggle-thumb"></span></span></label>
+            <div class="bot-feat-info"><span class="bot-feat-name">Asia Breakout</span><span class="bot-feat-desc">Buy/sell breakout of 10-hr Asian range · 50 pip TP · active 01:00–09:00 local</span></div>
+          </div>
+        </div>
+
+        <!-- Market Read -->
+        <div class="bot-section-head">Market Read</div>
+        <div id="botMarketRead" class="bot-mread-grid">
+          <div class="bot-mread-empty">Run scan to see market state</div>
+        </div>
+
+        <!-- Bot Signal Log -->
+        <div class="bot-section-head">
+          Bot Signal Log
+          <button class="bot-refresh-btn" onclick="renderBotLog()">&#8635; Refresh</button>
+        </div>
+        <div class="sig-table-wrap">
+          <table class="sig-table">
+            <thead>
+              <tr><th>Time</th><th>Strategy</th><th>Signal</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP</th><th>Detail</th><th>Action</th></tr>
+            </thead>
+            <tbody id="botSigBody">
+              <tr><td colspan="9" class="sig-empty">No signals generated — run Scan Now</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div><!-- /botSignalsCard -->
+
+  </div><!-- /anaContent -->
+</div>
+</div><!-- /view-analysis -->
+
+<!-- Floating Sync button — visible only on Analysis Lab tab -->
+<button id="anaFloatSync" class="ana-float-sync" onclick="syncAnalysis()" title="Sync MT4 data" style="display:none">
+  &#8635; Sync
+</button>
+
+<!-- Bot toast notification -->
+<div id="botToast" class="bot-toast"></div>
+
 <script src="js/app.js"></script>
 <script src="js/dashboard.js"></script>
+<script src="js/analysis.js"></script>
 </body>
 </html>
