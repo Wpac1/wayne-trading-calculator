@@ -334,6 +334,17 @@
     <button class="ana-bars-btn"        id="bars-100"  onclick="setAnaBars(100)">100</button>
     <button class="ana-bars-btn active" id="bars-200"  onclick="setAnaBars(200)">200</button>
     <button class="ana-bars-btn"        id="bars-500"  onclick="setAnaBars(500)">500</button>
+    <div class="ana-toolbar-sep"></div>
+    <span class="ana-tb-label">Refresh:</span>
+    <select id="refreshIntervalSelect" class="ana-refresh-select" onchange="setRefreshInterval(this.value)">
+      <option value="0">Off</option>
+      <option value="60">1 min</option>
+      <option value="120">2 min</option>
+      <option value="300" selected>5 min</option>
+      <option value="600">10 min</option>
+      <option value="900">15 min</option>
+    </select>
+    <span id="refreshDot" class="ana-refresh-dot" title="Auto-refresh active"></span>
   </div>
 
   <!-- Symbol selector + view toggle -->
@@ -383,28 +394,31 @@
       </div>
 
       <!-- Sidebar -->
-      <div class="ana-neon-sidebar">
+      <div class="ana-neon-sidebar" id="ana-sidebar-cards">
         <!-- AMD Phase -->
-        <div class="ana-neon-card">
-          <div class="ana-neon-card-head">AMD Phase <span style="font-size:9px;color:var(--muted);text-transform:none;letter-spacing:0">Accum &middot; Manip &middot; Delivery</span></div>
+        <div class="ana-neon-card" id="dcard-amd">
+          <div class="ana-neon-card-head"><span class="card-drag-handle" title="Drag to reorder">&#x28FF;</span>AMD Phase <span style="font-size:9px;color:var(--muted);text-transform:none;letter-spacing:0">Accum &middot; Manip &middot; Delivery</span></div>
           <div id="anaAMD"><div class="amd-empty">Load data to detect phase</div></div>
         </div>
         <!-- Key Levels -->
-        <div class="ana-neon-card">
-          <div class="ana-neon-card-head">Key Levels <span style="font-size:9px;color:var(--muted);text-transform:none;letter-spacing:0">str / touches / dist</span></div>
+        <div class="ana-neon-card" id="dcard-keylevels">
+          <div class="ana-neon-card-head"><span class="card-drag-handle" title="Drag to reorder">&#x28FF;</span>Key Levels <span style="font-size:9px;color:var(--muted);text-transform:none;letter-spacing:0">str / touches / dist</span></div>
           <div class="ana-neon-sr-list" id="anaSrList"></div>
         </div>
         <!-- Trend -->
-        <div class="ana-neon-card">
-          <div class="ana-neon-card-head">Trend Analysis</div>
+        <div class="ana-neon-card" id="dcard-trend">
+          <div class="ana-neon-card-head"><span class="card-drag-handle" title="Drag to reorder">&#x28FF;</span>Trend Analysis</div>
           <div id="anaTrend"></div>
         </div>
       </div>
     </div>
 
+    <!-- Below-chart draggable cards -->
+    <div id="ana-main-cards">
+
     <!-- Market Insights -->
-    <div class="ana-neon-card" style="margin-bottom:10px">
-      <div class="ana-neon-card-head">
+    <div class="ana-neon-card" id="dcard-insights">
+      <div class="ana-neon-card-head"><span class="card-drag-handle" title="Drag to reorder">&#x28FF;</span>
         Market Insights
         <span style="font-size:9px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">confluence &middot; ranges &middot; FVGs &middot; bias</span>
       </div>
@@ -412,20 +426,26 @@
     </div>
 
     <!-- Patterns + Fibonacci -->
-    <div class="ana-neon-bottom-row">
-      <div class="ana-neon-card">
-        <div class="ana-neon-card-head">Pattern Scanner <span id="anaPatternCount" class="pill" style="margin-left:0"></span></div>
-        <div id="anaPatterns"></div>
+    <div id="dcard-patfib" class="dcard-wrapper">
+      <div class="dcard-wrapper-handle ana-neon-card-head" style="background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.08);border-radius:6px 6px 0 0;padding:7px 12px;margin-bottom:0">
+        <span class="card-drag-handle" title="Drag to reorder">&#x28FF;</span>
+        <span style="font-size:9px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase">Patterns &amp; Fibonacci</span>
       </div>
-      <div class="ana-neon-card">
-        <div class="ana-neon-card-head">Fibonacci Retracements</div>
-        <div id="anaFib"></div>
+      <div class="ana-neon-bottom-row" style="margin-top:0">
+        <div class="ana-neon-card" style="border-radius:0 0 6px 6px">
+          <div class="ana-neon-card-head">Pattern Scanner <span id="anaPatternCount" class="pill" style="margin-left:0"></span></div>
+          <div id="anaPatterns"></div>
+        </div>
+        <div class="ana-neon-card" style="border-radius:0 0 6px 6px">
+          <div class="ana-neon-card-head">Fibonacci Retracements</div>
+          <div id="anaFib"></div>
+        </div>
       </div>
     </div>
 
     <!-- Deal Scorer -->
-    <div class="ana-neon-card">
-      <div class="ana-neon-card-head">
+    <div class="ana-neon-card" id="dcard-scorer">
+      <div class="ana-neon-card-head"><span class="card-drag-handle" title="Drag to reorder">&#x28FF;</span>
         Trade Deal Scorer
         <span style="font-size:10px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">Enter your setup. Get the verdict.</span>
       </div>
@@ -459,8 +479,8 @@
     </div>
 
     <!-- Bot / Signals -->
-    <div class="ana-neon-card" id="botSignalsCard">
-      <div class="ana-neon-card-head">
+    <div class="ana-neon-card" id="dcard-bot">
+      <div class="ana-neon-card-head"><span class="card-drag-handle" title="Drag to reorder">&#x28FF;</span>
         Bot &amp; Signals
         <div class="bot-tabs">
           <button class="bot-tab active" id="botTabSignals" onclick="showBotTab('signals')">Signals</button>
@@ -482,18 +502,26 @@
           <input  type="text"   id="sigNote"  class="sig-input sig-input-wide" placeholder="Note">
           <button class="sig-log-btn" onclick="logSignal()">&#43; Log Signal</button>
         </div>
-        <div class="sig-table-wrap">
-          <table class="sig-table">
-            <thead>
-              <tr>
-                <th>Time</th><th>Symbol</th><th>Dir</th><th>Entry</th>
-                <th>SL</th><th>TP</th><th>Basis</th><th>Status</th><th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="sigTableBody">
-              <tr><td colspan="9" class="sig-empty">No signals logged yet</td></tr>
-            </tbody>
-          </table>
+        <!-- Collapse toggle -->
+        <div class="sig-collapse-bar" onclick="toggleSigTable()">
+          <span class="sig-collapse-count" id="sigCollapseCount">0 signals</span>
+          <div class="sig-collapse-pills" id="sigCollapsePills"></div>
+          <span class="sig-collapse-arrow" id="sigCollapseArrow">&#9660;</span>
+        </div>
+        <div class="sig-table-collapse" id="sigTableCollapse">
+          <div class="sig-table-wrap">
+            <table class="sig-table">
+              <thead>
+                <tr>
+                  <th>Time</th><th>Symbol</th><th>Dir</th><th>Entry</th>
+                  <th>SL</th><th>TP</th><th>Basis</th><th>Status</th><th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="sigTableBody">
+                <tr><td colspan="9" class="sig-empty">No signals logged yet</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -621,8 +649,12 @@
         <!-- Bot Signal Log -->
         <div class="bot-section-head">
           Bot Signal Log
-          <button class="bot-refresh-btn" onclick="renderBotLog()">&#8635; Refresh</button>
+          <div style="display:flex;gap:6px;align-items:center;margin-left:auto">
+            <button class="bot-refresh-btn" onclick="renderBotLog()">&#8635; Refresh</button>
+            <button class="bot-refresh-btn" onclick="toggleBotLog()" id="botLogToggleBtn">&#9660; Hide</button>
+          </div>
         </div>
+        <div id="botLogCollapse">
         <div class="sig-table-wrap">
           <table class="sig-table">
             <thead>
@@ -633,9 +665,60 @@
             </tbody>
           </table>
         </div>
+        </div><!-- /botLogCollapse -->
       </div>
 
-    </div><!-- /botSignalsCard -->
+    </div><!-- /dcard-bot -->
+
+    <!-- Swing Trade Lab -->
+    <div class="ana-neon-card" id="dcard-swinglab">
+      <div class="ana-neon-card-head"><span class="card-drag-handle" title="Drag to reorder">&#x28FF;</span>
+        Swing Trade Lab
+        <span style="font-size:9px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">OBs &middot; liquidity &middot; setups &middot; MT4 limit orders</span>
+        <div style="display:flex;align-items:center;gap:6px;margin-left:auto">
+          <span style="font-size:9px;color:var(--muted)">TF:</span>
+          <select id="swingTFSelect" class="ana-refresh-select" onchange="rerunSwingLab(this.value)" style="font-size:10px">
+            <option value="auto">Auto (chart)</option>
+            <option value="H1">H1</option>
+            <option value="H4" selected>H4</option>
+          </select>
+          <span id="swingLabSymbol" style="font-size:9px;color:var(--cyan)"></span>
+        </div>
+      </div>
+      <!-- Trade config bar — persists across setups -->
+      <div class="swing-config-bar">
+        <div class="swing-config-group">
+          <span class="swing-config-lbl">Lot size</span>
+          <input type="number" id="swingLotSize" class="swing-config-input" value="0.02" step="0.01" min="0.01" oninput="updateSwingTotalLots()">
+        </div>
+        <div class="swing-config-group">
+          <span class="swing-config-lbl">Positions</span>
+          <input type="number" id="swingPositions" class="swing-config-input" value="3" step="1" min="1" max="10" oninput="updateSwingTotalLots()">
+        </div>
+        <div class="swing-config-group">
+          <span class="swing-config-lbl">Total</span>
+          <span id="swingTotalLots" class="swing-config-total">0.06 lots</span>
+        </div>
+        <div class="swing-config-sep"></div>
+        <div class="swing-config-group">
+          <span class="swing-config-lbl">TP split</span>
+          <select id="swingSplit" class="swing-config-select">
+            <option value="single">All @ TP1</option>
+            <option value="split" selected>Half TP1 &middot; Half TP2</option>
+            <option value="thirds">Thirds TP1 / TP2 / TP2</option>
+          </select>
+        </div>
+        <div class="swing-config-sep"></div>
+        <label class="swing-config-check">
+          <input type="checkbox" id="swingMoveBE" checked>
+          Move SL to B/E at TP1
+        </label>
+      </div>
+
+      <div id="swingLabContent"><div class="swing-empty">Load data in Analysis Lab to generate swing setups</div></div>
+    </div>
+
+    </div><!-- /ana-main-cards -->
 
   </div><!-- /anaContent -->
 </div>

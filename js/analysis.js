@@ -31,25 +31,49 @@ var CONF_DEFS = [
 var CONF_REQUIRED = 3; // ticked confluences needed to auto-go LIVE
 var ANA_SYNC_SCROLL = null; // saved scroll position during a sync reload
 
-// ── Silent 5-min background refresh ─────────────────────────────────────────
+// ── Silent background refresh ────────────────────────────────────────────────
+var ANA_REFRESH_SECS = parseInt(localStorage.getItem('wayne_refresh_secs') || '300') || 300;
+
+function setRefreshInterval(secs) {
+  ANA_REFRESH_SECS = parseInt(secs) || 0;
+  localStorage.setItem('wayne_refresh_secs', String(ANA_REFRESH_SECS));
+
+  // Restart timer with new interval
+  if (ANA_REFRESH_TIMER) { clearInterval(ANA_REFRESH_TIMER); ANA_REFRESH_TIMER = null; }
+  if (ANA_REFRESH_SECS > 0) {
+    ANA_REFRESH_TIMER = setInterval(silentRefresh, ANA_REFRESH_SECS * 1000);
+  }
+
+  // Update dot indicator
+  var dot = document.getElementById('refreshDot');
+  if (dot) dot.classList.toggle('active', ANA_REFRESH_SECS > 0);
+}
+
 function silentRefresh() {
   var view = document.getElementById('view-analysis');
-  if (!view || !view.classList.contains('active')) return; // not on analysis tab
+  if (!view || !view.classList.contains('active')) return;
   if (!ANA_ACTIVE_FILE || ANA_VIEW === 'multi') return;
 
-  // Save scroll so the re-render lands in the same spot
   ANA_SYNC_SCROLL = window.scrollY || window.pageYOffset || 0;
 
-  fetch('data/gold/' + ANA_ACTIVE_FILE + '?t=' + Date.now()) // bust cache
-    .then(function(r) { return r.ok ? r.text() : Promise.reject(); })
-    .then(function(txt) {
-      var data = parseAnalysisCSV(txt);
-      if (data.length < 30) return;
-      ANA_RAW_M15 = data;
-      ANA_MULTI_LOADED[ANA_ACTIVE_FILE] = data;
-      buildAnalysis(aggregateData(data, ANA_INTERVAL));
-    })
-    .catch(function() {}); // fail silently — don't show any error
+  // Re-read the active CSV and rebuild — called after sync attempt
+  function reloadFile() {
+    fetch('data/gold/' + ANA_ACTIVE_FILE + '?t=' + Date.now())
+      .then(function(r) { return r.ok ? r.text() : Promise.reject(); })
+      .then(function(txt) {
+        var data = parseAnalysisCSV(txt);
+        if (data.length < 30) return;
+        ANA_RAW_M15 = data;
+        ANA_MULTI_LOADED[ANA_ACTIVE_FILE] = data;
+        buildAnalysis(aggregateData(data, ANA_INTERVAL));
+      })
+      .catch(function() {});
+  }
+
+  // Pull fresh files from MT4 Common/Files first, then reload regardless of outcome
+  fetch('/api/sync', { method: 'POST' })
+    .then(function() { reloadFile(); })
+    .catch(function() { reloadFile(); }); // still reload even if server is down
 }
 
 // ── Auto-load on tab open ────────────────────────────────────────────────────
@@ -58,9 +82,18 @@ function initAnalysis() {
   updateSessionBadge();
   renderSigLog();
 
-  // Start silent refresh once — guard prevents stacking on repeated tab switches
-  if (!ANA_REFRESH_TIMER) {
-    ANA_REFRESH_TIMER = setInterval(silentRefresh, 5 * 60 * 1000); // every 5 min
+  // Wire up card drag-to-reorder (idempotent — safe to call on every tab switch)
+  initCardDrag();
+
+  // Restore saved refresh interval and sync dropdown
+  var sel = document.getElementById('refreshIntervalSelect');
+  if (sel) sel.value = String(ANA_REFRESH_SECS);
+  var dot = document.getElementById('refreshDot');
+  if (dot) dot.classList.toggle('active', ANA_REFRESH_SECS > 0);
+
+  // Start timer once — guard prevents stacking on tab switches
+  if (!ANA_REFRESH_TIMER && ANA_REFRESH_SECS > 0) {
+    ANA_REFRESH_TIMER = setInterval(silentRefresh, ANA_REFRESH_SECS * 1000);
   }
 
   // Restore bot order type + lot size UI from persisted values
@@ -607,7 +640,7 @@ function findSwings(data, lookback) {
 // ── S/R Zone Detection ───────────────────────────────────────────────────────
 function detectSRZones(data, atr) {
   var latestATR = atr.filter(function(v){ return v !== null; }).slice(-1)[0];
-  var tol       = latestATR * 0.65;
+  var tol       = latestATR * 0.6;
   var close     = data[data.length-1].close;
 
   var swings = findSwings(data, 5);
@@ -642,27 +675,37 @@ function detectSRZones(data, atr) {
       if (b.low <= avgPrice + tol && b.high >= avgPrice - tol) touches++;
     }
 
-    var step  = close < 2000 ? 25 : 50;
-    var nearRound = (avgPrice % step) < latestATR * 0.4 || (step - avgPrice % step) < latestATR * 0.4;
+    // Scale-aware round number step (works for Gold, US30, NAS100, US500)
+    var step = close < 100 ? 1 : close < 500 ? 5 : close < 2000 ? 25 :
+               close < 5000 ? 50 : close < 15000 ? 100 : close < 50000 ? 500 : 1000;
+    var mod  = avgPrice % step;
+    var nearRound = mod < latestATR * 0.35 || (step - mod) < latestATR * 0.35;
 
     var raw = cluster.length * 1.5 + Math.log(touches + 1) * 2 + (nearRound ? 2.5 : 0);
     var strength = Math.round(Math.min(10, raw) * 10) / 10;
+    var distPct  = (avgPrice - close) / close * 100;
 
     zones.push({
-      price:      Math.round(avgPrice * 10) / 10,
-      type:       type,
-      touches:    touches,
-      strength:   strength,
-      barsAgo:    data.length - 1 - latestIdx,
-      distPct:    (avgPrice - close) / close * 100,
-      isRound:    nearRound,
+      price:    Math.round(avgPrice * 10) / 10,
+      type:     type,
+      touches:  touches,
+      strength: strength,
+      barsAgo:  data.length - 1 - latestIdx,
+      distPct:  distPct,
+      isRound:  nearRound,
     });
   }
 
+  // Filter to ±8% of current price, sort by proximity-weighted strength
   return zones
-    .filter(function(z){ return Math.abs(z.distPct) <= 9; })
-    .sort(function(a,b){ return b.strength - a.strength; })
-    .slice(0, 14);
+    .filter(function(z){ return Math.abs(z.distPct) <= 8; })
+    .sort(function(a, b){
+      // Proximity score: strength discounted by distance from price
+      var aScore = a.strength / (Math.abs(a.distPct) + 0.8);
+      var bScore = b.strength / (Math.abs(b.distPct) + 0.8);
+      return bScore - aScore;
+    })
+    .slice(0, 16);
 }
 
 // ── Fibonacci ────────────────────────────────────────────────────────────────
@@ -1123,6 +1166,516 @@ function renderScoreResult(el, total, grade, cls, verdict, bd, rr, risk, reward)
     '<div class="sc-bd">' + rows + '</div>';
 }
 
+// ── Signal table collapse ─────────────────────────────────────────────────────
+var _sigTableOpen = true;
+var _botLogOpen   = true;
+
+function toggleSigTable() {
+  _sigTableOpen = !_sigTableOpen;
+  var wrap  = document.getElementById('sigTableCollapse');
+  var arrow = document.getElementById('sigCollapseArrow');
+  if (wrap)  wrap.style.maxHeight  = _sigTableOpen ? wrap.scrollHeight + 'px' : '0';
+  if (arrow) arrow.classList.toggle('open', _sigTableOpen);
+}
+
+function toggleBotLog() {
+  _botLogOpen = !_botLogOpen;
+  var wrap = document.getElementById('botLogCollapse');
+  var btn  = document.getElementById('botLogToggleBtn');
+  if (wrap) wrap.style.display = _botLogOpen ? '' : 'none';
+  if (btn)  btn.textContent    = (_botLogOpen ? '▼ Hide' : '▶ Show');
+}
+
+// Patch renderSigLog to also update the collapse summary bar
+var _origRenderSigLog = null;
+function patchSigLogWithCollapse() {
+  if (_origRenderSigLog) return;
+  var orig = renderSigLog;
+  renderSigLog = function() {
+    orig();
+    updateSigCollapseBar();
+  };
+  _origRenderSigLog = orig;
+}
+
+function updateSigCollapseBar() {
+  var sigs    = loadSigLog();
+  var live    = sigs.filter(function(s){ return s.status === 'LIVE'; }).length;
+  var pending = sigs.filter(function(s){ return s.status === 'PENDING'; }).length;
+  var done    = sigs.filter(function(s){ return ['WIN','LOSS','BE','CANCEL'].indexOf(s.status) >= 0; }).length;
+
+  var countEl  = document.getElementById('sigCollapseCount');
+  var pillsEl  = document.getElementById('sigCollapsePills');
+  var wrapEl   = document.getElementById('sigTableCollapse');
+
+  if (countEl) countEl.textContent = sigs.length + ' signal' + (sigs.length !== 1 ? 's' : '');
+  if (pillsEl) pillsEl.innerHTML =
+    (live    ? '<span class="sig-cpill sig-cpill-live">'    + live    + ' live</span>'    : '') +
+    (pending ? '<span class="sig-cpill sig-cpill-pending">' + pending + ' pending</span>' : '') +
+    (done    ? '<span class="sig-cpill sig-cpill-done">'    + done    + ' done</span>'    : '');
+
+  // Keep open state consistent
+  if (wrapEl && _sigTableOpen) wrapEl.style.maxHeight = wrapEl.scrollHeight + 'px';
+}
+
+// ── Swing Trade Lab — detection ───────────────────────────────────────────────
+
+function detectOrderBlocks(data, atr) {
+  var n       = data.length;
+  var atrLast = atr.filter(function(v){ return v; }).slice(-1)[0] || 1;
+  var minMove = atrLast * 2.2;
+  var close   = data[n - 1].close;
+  var obs     = [];
+
+  for (var i = 4; i < n; i++) {
+    var bullMove = data[i].close - data[i - 3].close;
+    var bearMove = data[i - 3].close - data[i].close;
+
+    if (bullMove >= minMove) {
+      for (var j = i - 1; j >= Math.max(0, i - 5); j--) {
+        var b = data[j];
+        if (b.close < b.open) {
+          var mid = (b.high + b.low) / 2;
+          var mitigated = false;
+          for (var k = j + 1; k < n; k++) { if (data[k].low <= mid) { mitigated = true; break; } }
+          if (!mitigated) obs.push({ type: 'bullish', high: parseFloat(b.high.toFixed(1)), low: parseFloat(b.low.toFixed(1)), mid: parseFloat(mid.toFixed(1)), date: b.date, barIdx: j });
+          break;
+        }
+      }
+    }
+
+    if (bearMove >= minMove) {
+      for (var j = i - 1; j >= Math.max(0, i - 5); j--) {
+        var b = data[j];
+        if (b.close > b.open) {
+          var mid = (b.high + b.low) / 2;
+          var mitigated = false;
+          for (var k = j + 1; k < n; k++) { if (data[k].high >= mid) { mitigated = true; break; } }
+          if (!mitigated) obs.push({ type: 'bearish', high: parseFloat(b.high.toFixed(1)), low: parseFloat(b.low.toFixed(1)), mid: parseFloat(mid.toFixed(1)), date: b.date, barIdx: j });
+          break;
+        }
+      }
+    }
+  }
+
+  // Deduplicate by date+type+low, filter to within 8 ATR of price, most recent first
+  var seen = {};
+  return obs.filter(function(ob) {
+    var key = ob.type + '|' + ob.date + '|' + ob.low;
+    if (seen[key]) return false; seen[key] = true;
+    return Math.abs(close - ob.mid) <= atrLast * 10;
+  }).reverse().slice(0, 6);
+}
+
+function calcSessionLevels(data) {
+  var n       = data.length;
+  var lastDate = data[n - 1].date;
+  var byDate  = {};
+
+  data.forEach(function(b) {
+    if (!byDate[b.date]) byDate[b.date] = [];
+    byDate[b.date].push(b);
+  });
+
+  var dates    = Object.keys(byDate).sort();
+  var todayIdx = dates.indexOf(lastDate);
+  var levels   = [];
+
+  function hiLo(bars) {
+    return {
+      hi: Math.max.apply(null, bars.map(function(b){ return b.high; })),
+      lo: Math.min.apply(null, bars.map(function(b){ return b.low; })),
+    };
+  }
+
+  if (todayIdx > 0) {
+    var pd = hiLo(byDate[dates[todayIdx - 1]]);
+    levels.push({ type: 'PDH', price: pd.hi, label: 'Prev Day High', color: '#f64f57' });
+    levels.push({ type: 'PDL', price: pd.lo, label: 'Prev Day Low',  color: '#0ecb8a' });
+  }
+
+  if (todayIdx >= 5) {
+    var wkDates = dates.slice(Math.max(0, todayIdx - 7), todayIdx);
+    var wkBars  = wkDates.reduce(function(a, d){ return a.concat(byDate[d]); }, []);
+    if (wkBars.length) {
+      var pw = hiLo(wkBars);
+      levels.push({ type: 'PWH', price: pw.hi, label: 'Prev Week High', color: 'rgba(246,79,87,.55)' });
+      levels.push({ type: 'PWL', price: pw.lo, label: 'Prev Week Low',  color: 'rgba(14,203,138,.55)'  });
+    }
+  }
+
+  return levels;
+}
+
+function detectEqualLevels(data, atr) {
+  var atrLast  = atr.filter(function(v){ return v; }).slice(-1)[0] || 1;
+  var tol      = atrLast * 0.22;
+  var swings   = findSwings(data.slice(-80), 4);
+  var close    = data[data.length - 1].close;
+  var levels   = [];
+
+  function findEquals(arr, side) {
+    for (var i = 0; i < arr.length - 1; i++) {
+      for (var j = i + 1; j < arr.length; j++) {
+        if (Math.abs(arr[i].price - arr[j].price) <= tol) {
+          var avg = (arr[i].price + arr[j].price) / 2;
+          if (Math.abs(avg - close) / close <= 0.06) {
+            levels.push({
+              type:  side === 'high' ? 'equal_highs' : 'equal_lows',
+              price: parseFloat(avg.toFixed(1)),
+              label: side === 'high' ? 'Equal Highs — sell-side liq.' : 'Equal Lows — buy-side liq.',
+              color: side === 'high' ? '#f64f57' : '#0ecb8a',
+            });
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  findEquals(swings.highs, 'high');
+  findEquals(swings.lows,  'low');
+  return levels;
+}
+
+function detectWPattern(data, atrLast) {
+  var swings = findSwings(data.slice(-100), 5);
+  if (!swings.lows || swings.lows.length < 2) return null;
+
+  var last2  = swings.lows.slice(-2);
+  var l0 = last2[0], l1 = last2[1];
+  var close  = data[data.length - 1].close;
+  var diff   = Math.abs(l0.price - l1.price);
+
+  if (diff > atrLast * 1.5) return null;
+
+  var between  = data.slice(l0.index, l1.index + 1);
+  if (!between.length) return null;
+  var neckline = Math.max.apply(null, between.map(function(b){ return b.high; }));
+  var bottom   = Math.min(l0.price, l1.price);
+  if (close <= bottom) return null;
+
+  var height   = neckline - bottom;
+  var equalness = 1 - diff / (atrLast * 1.5);
+  var aboveNeck = close >= neckline ? 15 : 0;
+  var conf = Math.min(92, Math.round(58 + equalness * 24 + aboveNeck));
+
+  return {
+    l1Price: parseFloat(l0.price.toFixed(1)), l2Price: parseFloat(l1.price.toFixed(1)),
+    neckline: parseFloat(neckline.toFixed(1)), bottom: parseFloat(bottom.toFixed(1)),
+    confidence: conf,
+    entry: parseFloat(neckline.toFixed(1)),
+    sl:    parseFloat((bottom - atrLast * 0.5).toFixed(1)),
+    tp1:   parseFloat((neckline + height).toFixed(1)),
+    tp2:   parseFloat((neckline + height * 2).toFixed(1)),
+    note:  'Double bottom ' + l0.price.toFixed(1) + ' / ' + l1.price.toFixed(1) + ' · neckline ' + neckline.toFixed(1),
+  };
+}
+
+function detectSwingSetups(data, emas, zones, atr, fib, amd) {
+  var setups  = [];
+  var n       = data.length;
+  var close   = data[n - 1].close;
+  var atrLast = atr.filter(function(v){ return v; }).slice(-1)[0] || 1;
+  var obs     = (ANA && ANA.obs) ? ANA.obs : [];
+
+  // ── 1. W-Bottom ──────────────────────────────────────────────────────────
+  var wp = detectWPattern(data, atrLast);
+  if (wp) {
+    setups.push({ type: 'W-Bottom', icon: '〓', dir: 'buy', confidence: wp.confidence,
+      entry: wp.entry, sl: wp.sl, tp1: wp.tp1, tp2: wp.tp2, note: wp.note });
+  }
+
+  // ── 2. Order Block entries ────────────────────────────────────────────────
+  obs.forEach(function(ob) {
+    if (ob.type === 'bullish' && close > ob.high && Math.abs(close - ob.high) <= atrLast * 6) {
+      var r = Math.abs(ob.high - ob.low) + atrLast * 0.3;
+      setups.push({ type: 'OB Long Entry', icon: '⬜', dir: 'buy', confidence: 72,
+        entry: ob.high, sl: parseFloat((ob.low - atrLast * 0.3).toFixed(1)),
+        tp1: parseFloat((ob.high + r * 2).toFixed(1)), tp2: parseFloat((ob.high + r * 3.5).toFixed(1)),
+        note: 'Bullish OB ' + ob.low + '–' + ob.high + ' from ' + ob.date + ' — buy the retest' });
+    }
+    if (ob.type === 'bearish' && close < ob.low && Math.abs(close - ob.low) <= atrLast * 6) {
+      var r = Math.abs(ob.high - ob.low) + atrLast * 0.3;
+      setups.push({ type: 'OB Short Entry', icon: '⬛', dir: 'sell', confidence: 72,
+        entry: ob.low, sl: parseFloat((ob.high + atrLast * 0.3).toFixed(1)),
+        tp1: parseFloat((ob.low - r * 2).toFixed(1)), tp2: parseFloat((ob.low - r * 3.5).toFixed(1)),
+        note: 'Bearish OB ' + ob.low + '–' + ob.high + ' from ' + ob.date + ' — sell the retest' });
+    }
+  });
+
+  // ── 3. AMD Liquidity Sweep entries ───────────────────────────────────────
+  if (amd && amd.phase === 'MANIPULATION' && amd.manipLevel) {
+    if (amd.dir === 'up') {
+      setups.push({ type: 'Liquidity Sweep Long', icon: '◈', dir: 'buy', confidence: 82,
+        entry: parseFloat(close.toFixed(1)),
+        sl:    parseFloat((amd.manipLevel - atrLast * 0.5).toFixed(1)),
+        tp1:   parseFloat(amd.accumHigh.toFixed(1)),
+        tp2:   parseFloat((amd.accumHigh + (amd.accumHigh - amd.accumLow)).toFixed(1)),
+        note:  'AMD: swept lows at ' + amd.manipLevel.toFixed(1) + '. Range top ' + amd.accumHigh.toFixed(1) + ' is primary target' });
+    }
+    if (amd.dir === 'down') {
+      setups.push({ type: 'Liquidity Sweep Short', icon: '◈', dir: 'sell', confidence: 82,
+        entry: parseFloat(close.toFixed(1)),
+        sl:    parseFloat((amd.manipLevel + atrLast * 0.5).toFixed(1)),
+        tp1:   parseFloat(amd.accumLow.toFixed(1)),
+        tp2:   parseFloat((amd.accumLow - (amd.accumHigh - amd.accumLow)).toFixed(1)),
+        note:  'AMD: swept highs at ' + amd.manipLevel.toFixed(1) + '. Range bottom ' + amd.accumLow.toFixed(1) + ' is primary target' });
+    }
+  }
+
+  // ── 4. Fibonacci + S/R Confluence ────────────────────────────────────────
+  if (fib && zones.length) {
+    [0.382, 0.5, 0.618].forEach(function(ratio) {
+      var lev = fib.levels.filter(function(l){ return l.ratio === ratio; })[0];
+      if (!lev) return;
+      if (Math.abs(close - lev.price) > atrLast * 2) return; // must be near current price
+      var nearZ = zones.filter(function(z){ return Math.abs(z.price - lev.price) <= atrLast * 1.2; })[0];
+      if (!nearZ) return;
+      var dir = fib.dir === 'retrace-down' ? 'buy' : 'sell';
+      var conf = Math.min(88, 62 + nearZ.strength * 2.5);
+      setups.push({
+        type: 'Fib ' + (ratio * 100).toFixed(1) + '% + S/R', icon: '◆',
+        dir: dir, confidence: Math.round(conf),
+        entry: parseFloat(lev.price.toFixed(1)),
+        sl:    parseFloat((dir === 'buy' ? lev.price - atrLast * 1.5 : lev.price + atrLast * 1.5).toFixed(1)),
+        tp1:   parseFloat((dir === 'buy' ? fib.swingH.price : fib.swingL.price).toFixed(1)),
+        tp2:   parseFloat((dir === 'buy' ? fib.swingH.price + (fib.swingH.price - fib.swingL.price) * 0.382 : fib.swingL.price - (fib.swingH.price - fib.swingL.price) * 0.382).toFixed(1)),
+        note: 'Fib ' + (ratio * 100) + '% at ' + lev.price.toFixed(1) + ' + ' + nearZ.type + ' zone (' + nearZ.touches + ' touches, str ' + nearZ.strength + ')',
+      });
+    });
+  }
+
+  return setups.sort(function(a, b){ return b.confidence - a.confidence; });
+}
+
+var _swingSetups = [];
+
+function renderSwingLab(setups, sessLevels, obs, eqLevels) {
+  var el = document.getElementById('swingLabContent');
+  if (!el) return;
+  _swingSetups = setups;
+
+  var symEl = document.getElementById('swingLabSymbol');
+  if (symEl) symEl.textContent = (ANA_ACTIVE_SYMBOL || '') + ' · ' + ANA_INTERVAL;
+
+  // Session levels
+  var sessHtml = '';
+  if (sessLevels.length) {
+    var close = ANA ? ANA.data[ANA.data.length - 1].close : 0;
+    sessHtml = '<div class="swing-section-head">Session Levels</div><div class="swing-sess-grid">' +
+      sessLevels.map(function(l) {
+        var d = (l.price - close).toFixed(1);
+        return '<div class="swing-sess-row">' +
+          '<span class="swing-sess-type" style="color:' + l.color + '">' + l.type + '</span>' +
+          '<span class="swing-sess-price" style="color:' + l.color + '">' + l.price.toFixed(1) + '</span>' +
+          '<span class="swing-sess-dist">' + (parseFloat(d) >= 0 ? '+' : '') + d + '</span>' +
+        '</div>';
+      }).join('') + '</div>';
+  }
+
+  // Equal levels
+  var eqHtml = eqLevels.length ? '<div class="swing-section-head">Liquidity Clusters (Equal H/L)</div>' +
+    eqLevels.map(function(l) {
+      var close = ANA ? ANA.data[ANA.data.length - 1].close : 0;
+      var d = (l.price - close).toFixed(1);
+      return '<div class="swing-eq-row">' +
+        '<span style="color:' + l.color + ';font-size:12px;font-weight:700;font-family:var(--num-font)">' + l.price.toFixed(1) + '</span>' +
+        '<span style="color:var(--muted);font-size:10px;flex:1">' + l.label + '</span>' +
+        '<span style="color:' + l.color + ';font-size:10px">' + (parseFloat(d) >= 0 ? '+' : '') + d + '</span>' +
+      '</div>';
+    }).join('') : '';
+
+  // Order blocks
+  var obHtml = obs.length ? '<div class="swing-section-head">Unmitigated Order Blocks</div>' +
+    obs.map(function(ob) {
+      var close = ANA ? ANA.data[ANA.data.length - 1].close : 0;
+      var col = ob.type === 'bullish' ? 'var(--green)' : 'var(--red)';
+      var lbl = ob.type === 'bullish' ? '▲ BULL OB' : '▼ BEAR OB';
+      var d   = (ob.mid - close).toFixed(1);
+      return '<div class="swing-ob-row">' +
+        '<span class="swing-ob-type" style="color:' + col + '">' + lbl + '</span>' +
+        '<span class="swing-ob-zone" style="color:' + col + '">' + ob.low + ' – ' + ob.high + '</span>' +
+        '<span class="swing-ob-dist">' + (parseFloat(d) >= 0 ? '+' : '') + d + '</span>' +
+        '<span class="swing-ob-date">' + ob.date + '</span>' +
+      '</div>';
+    }).join('') : '<div style="color:var(--dim);font-size:10px">No unmitigated OBs near price</div>';
+
+  // Setups
+  var setupsHtml = !setups.length
+    ? '<div class="swing-empty">No high-probability setups detected. Switch to H1/H4 for swing context.</div>'
+    : '<div class="swing-section-head">Detected Setups — send as limit order to MT4</div>' +
+      setups.map(function(s, idx) {
+        var col     = s.dir === 'buy' ? 'var(--green)' : 'var(--red)';
+        var dirLbl  = s.dir === 'buy' ? '▲ LONG' : '▼ SHORT';
+        var riskPts = Math.abs(s.entry - s.sl);
+        var rw1     = riskPts > 0 ? (Math.abs(s.tp1 - s.entry) / riskPts).toFixed(1) : '—';
+        var rw2     = riskPts > 0 ? (Math.abs(s.tp2 - s.entry) / riskPts).toFixed(1) : '—';
+        var cCol    = s.confidence >= 80 ? 'var(--green)' : s.confidence >= 65 ? 'var(--gold)' : 'var(--muted)';
+        return '<div class="swing-setup-card">' +
+          '<div class="swing-setup-head">' +
+            '<span class="swing-setup-type">' + s.icon + ' ' + s.type + '</span>' +
+            '<span class="swing-dir-badge" style="color:' + col + ';border-color:' + col + '">' + dirLbl + '</span>' +
+            '<span class="swing-conf" style="color:' + cCol + '">' + s.confidence + '% conf.</span>' +
+          '</div>' +
+          '<div class="swing-levels-row">' +
+            '<div class="swing-level"><span class="swing-level-lbl">Entry (LMT)</span><span class="swing-level-val">' + s.entry + '</span></div>' +
+            '<div class="swing-level"><span class="swing-level-lbl">Stop Loss</span><span class="swing-level-val red">' + s.sl + '</span></div>' +
+            '<div class="swing-level"><span class="swing-level-lbl">TP 1</span><span class="swing-level-val green">' + s.tp1 + ' <small>1:' + rw1 + 'R</small></span></div>' +
+            '<div class="swing-level"><span class="swing-level-lbl">TP 2</span><span class="swing-level-val green">' + s.tp2 + ' <small>1:' + rw2 + 'R</small></span></div>' +
+          '</div>' +
+          '<div class="swing-note">' + s.note + '</div>' +
+          '<button class="swing-send-btn" onclick="sendSwingToMT4(' + idx + ')">' +
+            '&#9654; Send to MT4 &mdash; ' + s.dir.toUpperCase() + ' ' + s.entry +
+            ' &nbsp;|&nbsp; <span id="swingBtnLots_' + idx + '">…</span>' +
+          '</button>' +
+        '</div>';
+      }).join('');
+
+  el.innerHTML =
+    '<div class="swing-grid"><div>' + sessHtml + eqHtml + '</div><div>' + obHtml + '</div></div>' +
+    setupsHtml;
+
+  // Populate button lot labels now that DOM is ready
+  updateSwingTotalLots();
+}
+
+// Load a specific TF for swing analysis independently of the chart view
+function rerunSwingLab(selectedTF) {
+  var sym   = ANA_ACTIVE_SYMBOL || 'XAUUSD';
+  var tf    = (selectedTF === 'auto' || !selectedTF) ? ANA_INTERVAL : selectedTF;
+  var file  = sym + '_' + tf + '.csv';
+
+  var symEl = document.getElementById('swingLabSymbol');
+  if (symEl) symEl.textContent = sym + ' · ' + tf;
+
+  // If already loaded, use cached data
+  if (ANA_MULTI_LOADED[file] && ANA_MULTI_LOADED[file].length >= 30) {
+    _runSwingOnData(ANA_MULTI_LOADED[file], tf);
+    return;
+  }
+
+  var el = document.getElementById('swingLabContent');
+  if (el) el.innerHTML = '<div class="swing-empty">Loading ' + file + '…</div>';
+
+  fetch('data/gold/' + file + '?t=' + Date.now())
+    .then(function(r) { return r.ok ? r.text() : Promise.reject('File not found: ' + file); })
+    .then(function(txt) {
+      var data = parseAnalysisCSV(txt);
+      if (data.length < 30) throw new Error('Too few bars');
+      ANA_MULTI_LOADED[file] = data;
+      _runSwingOnData(data, tf);
+    })
+    .catch(function(err) {
+      if (el) el.innerHTML = '<div class="swing-empty" style="color:var(--red)">' +
+        'Could not load ' + file + '. Sync MT4 to get ' + sym + ' ' + tf + ' data.</div>';
+    });
+}
+
+function _runSwingOnData(data, tf) {
+  var closes = data.map(function(d){ return d.close; });
+  var atr    = calcATR(data, 14);
+  var emas   = { e20: calcEMA(closes,20), e50: calcEMA(closes,50), e200: calcEMA(closes,200) };
+  var zones  = detectSRZones(data, atr);
+  var fib    = calcFibLevels(data);
+  var amd    = detectAMDPhase(data, atr);
+  var obs    = detectOrderBlocks(data, atr);
+  var sess   = calcSessionLevels(data);
+  var eq     = detectEqualLevels(data, atr);
+  var rsi    = calcRSI(closes, 14);
+
+  // Temporarily expose obs on ANA so detectSwingSetups can access it
+  var prevObs = ANA ? ANA.obs : [];
+  if (ANA) ANA.obs = obs;
+
+  var setups = detectSwingSetups(data, emas, zones, atr, fib, amd);
+  renderSwingLab(setups, sess, obs, eq);
+
+  if (ANA) ANA.obs = prevObs; // restore
+
+  var symEl = document.getElementById('swingLabSymbol');
+  if (symEl) symEl.textContent = (ANA_ACTIVE_SYMBOL || '') + ' · ' + tf + ' · ' + data.length + ' bars';
+}
+
+function updateSwingTotalLots() {
+  var lot   = parseFloat((document.getElementById('swingLotSize')  || {}).value) || 0.02;
+  var pos   = parseInt((document.getElementById('swingPositions')  || {}).value) || 1;
+  var total = parseFloat((lot * pos).toFixed(2));
+  var el    = document.getElementById('swingTotalLots');
+  if (el) el.textContent = total + ' lots';
+
+  // Update all send button lot labels
+  _swingSetups.forEach(function(s, idx) {
+    var btn = document.getElementById('swingBtnLots_' + idx);
+    if (btn) btn.textContent = pos + ' × ' + lot + ' = ' + total + ' lots';
+  });
+}
+
+function sendSwingToMT4(idx) {
+  var s = _swingSetups[idx];
+  if (!s) return;
+
+  // Read config
+  var lotSize   = parseFloat((document.getElementById('swingLotSize')  || {}).value) || 0.02;
+  var positions = parseInt((document.getElementById('swingPositions')   || {}).value) || 1;
+  var split     = ((document.getElementById('swingSplit') || {}).value) || 'single';
+  var moveBE    = !!(document.getElementById('swingMoveBE') || {}).checked;
+
+  // Build order slices based on TP split strategy
+  var slices = []; // [{lots, tp}]
+
+  if (split === 'single' || positions === 1) {
+    slices.push({ lots: parseFloat((lotSize * positions).toFixed(2)), tp: s.tp1, tag: '' });
+
+  } else if (split === 'split') {
+    var n1 = Math.ceil(positions / 2), n2 = positions - n1;
+    slices.push({ lots: parseFloat((lotSize * n1).toFixed(2)), tp: s.tp1, tag: '[1/2 → TP1]' });
+    slices.push({ lots: parseFloat((lotSize * n2).toFixed(2)), tp: s.tp2, tag: '[2/2 → TP2]' });
+
+  } else { // thirds
+    var n1 = Math.ceil(positions / 3);
+    var n2 = Math.ceil((positions - n1) / 2);
+    var n3 = positions - n1 - n2;
+    if (n1 > 0) slices.push({ lots: parseFloat((lotSize * n1).toFixed(2)), tp: s.tp1, tag: '[1/3 → TP1]' });
+    if (n2 > 0) slices.push({ lots: parseFloat((lotSize * n2).toFixed(2)), tp: s.tp2, tag: '[2/3 → TP2]' });
+    if (n3 > 0) slices.push({ lots: parseFloat((lotSize * n3).toFixed(2)), tp: s.tp2, tag: '[3/3 → TP2]' });
+  }
+
+  var beNote  = moveBE ? ' | Move SL to B/E when TP1 hit' : '';
+  var total   = 0;
+
+  slices.forEach(function(sl, i) {
+    setTimeout(function() {
+      var sig = {
+        id:          Date.now() + i * 137 + Math.floor(Math.random() * 100),
+        time:        new Date().toISOString(),
+        symbol:      ANA_ACTIVE_SYMBOL || 'XAUUSD',
+        dir:         s.dir,
+        entry:       s.entry,
+        sl:          s.sl,
+        tp:          sl.tp,
+        lot:         sl.lots,
+        orderType:   'PENDING',
+        basis:       'Swing Lab — ' + s.type + ' ' + sl.tag,
+        note:        s.note + beNote,
+        status:      'LIVE',
+        confluences: {},
+        confRequired: 0,
+        mt4Status:   null,
+      };
+      var sigs = loadSigLog();
+      sigs.push(sig);
+      saveSigLog(sigs);
+      sendSignalToMT4(sig.id);
+      total++;
+      if (total === slices.length) {
+        showBotToast('✓ ' + slices.length + ' order' + (slices.length > 1 ? 's' : '') + ' sent to MT4 — ' + s.dir.toUpperCase() + ' ' + s.type, 'ok');
+        renderSigLog();
+      }
+    }, i * 250); // small gap between orders so EA processes each
+  });
+}
+
 // ── Market Insights ───────────────────────────────────────────────────────────
 
 function calcConfluenceZones(data, emas, zones, fib, atr) {
@@ -1559,7 +2112,8 @@ function buildAnalysis(data) {
 
   var amd  = detectAMDPhase(data, atr);
   var fvgs = detectFVGs(data, atr);
-  ANA = { data: data, atr: atr, emas: emas, rsi: rsi, zones: zones, trend: null, amd: amd, fvgs: fvgs };
+  var obs  = detectOrderBlocks(data, atr);
+  ANA = { data: data, atr: atr, emas: emas, rsi: rsi, zones: zones, trend: null, amd: amd, fvgs: fvgs, obs: obs };
 
   var trend    = analyzeTrend(data, emas, atr);
   ANA.trend    = trend;
@@ -1577,6 +2131,27 @@ function buildAnalysis(data) {
   renderPatterns(patterns);
   renderFib(fib, data[data.length-1].close);
   renderInsights(data, emas, zones, fib, atr, trend, rsi, amd);
+
+  var sessLevels = calcSessionLevels(data);
+  var eqLevels   = detectEqualLevels(data, atr);
+  // Swing Lab: use its own TF selector (auto falls back to current chart data)
+  var swingTFEl = document.getElementById('swingTFSelect');
+  var swingTF   = swingTFEl ? swingTFEl.value : 'auto';
+  if (swingTF === 'auto') {
+    var swingSetups = detectSwingSetups(data, emas, zones, atr, fib, amd);
+    renderSwingLab(swingSetups, sessLevels, obs, eqLevels);
+    var symEl = document.getElementById('swingLabSymbol');
+    if (symEl) symEl.textContent = (ANA_ACTIVE_SYMBOL || '') + ' · ' + ANA_INTERVAL;
+  } else {
+    rerunSwingLab(swingTF); // loads dedicated TF file
+  }
+
+  // Draw session levels on chart (store on ANA for drawNeonChart)
+  ANA.sessLevels = sessLevels;
+  ANA.eqLevels   = eqLevels;
+
+  patchSigLogWithCollapse();
+  updateSigCollapseBar();
 
   var cp = data[data.length-1].close;
   var atrLast = atr.filter(function(v){ return v; }).slice(-1)[0];
@@ -1785,6 +2360,44 @@ function drawNeonChart(canvasId, bars, emas, fullAtr, zones, swings, tf, fib) {
         ctx.textAlign   = 'left';
         ctx.globalAlpha = 0.8;
         ctx.fillText('FVG', pad.left + 3, topY + 9);
+        ctx.restore();
+      });
+    }
+
+    // ── Order Blocks ──────────────────────────────────────────────────────
+    if (ANA && ANA.obs && ANA.obs.length) {
+      ANA.obs.forEach(function(ob) {
+        var topY = toY(ob.high), botY = toY(ob.low);
+        if (botY < pad.top || topY > pad.top + cH) return;
+        topY = Math.max(pad.top, topY); botY = Math.min(pad.top + cH, botY);
+        var obCol = ob.type === 'bullish' ? 'rgba(14,203,138,' : 'rgba(246,79,87,';
+        ctx.save();
+        ctx.globalAlpha = 0.08; ctx.fillStyle = obCol + '1)';
+        ctx.fillRect(pad.left, topY, cW, botY - topY);
+        ctx.globalAlpha = 0.5; ctx.strokeStyle = obCol + '0.7)';
+        ctx.lineWidth = 0.8; ctx.setLineDash([2, 3]);
+        ctx.strokeRect(pad.left, topY, cW, botY - topY);
+        ctx.setLineDash([]);
+        ctx.fillStyle = obCol + '0.9)'; ctx.font = 'bold 7px Consolas,monospace';
+        ctx.textAlign = 'left'; ctx.globalAlpha = 0.85;
+        ctx.fillText((ob.type === 'bullish' ? '▲' : '▼') + ' OB', pad.left + 3, topY + 9);
+        ctx.restore();
+      });
+    }
+
+    // ── Session Levels (PDH/PDL/PWH/PWL) ────────────────────────────────
+    if (ANA && ANA.sessLevels && ANA.sessLevels.length) {
+      ANA.sessLevels.forEach(function(l) {
+        var ly = toY(l.price);
+        if (ly < pad.top || ly > pad.top + cH) return;
+        ctx.save();
+        ctx.strokeStyle = l.color; ctx.lineWidth = 0.8;
+        ctx.setLineDash(l.type.startsWith('PW') ? [2, 5] : [5, 4]);
+        ctx.globalAlpha = 0.55;
+        ctx.beginPath(); ctx.moveTo(pad.left, ly); ctx.lineTo(pad.left + cW, ly); ctx.stroke();
+        ctx.setLineDash([]); ctx.fillStyle = l.color; ctx.globalAlpha = 0.85;
+        ctx.font = '7px Consolas,monospace'; ctx.textAlign = 'left';
+        ctx.fillText(l.type + ' ' + l.price.toFixed(1), pad.left + cW + 5, ly + 3);
         ctx.restore();
       });
     }
@@ -2202,19 +2815,41 @@ function renderSRList(zones, currentPrice, latestATR) {
     return;
   }
 
-  el.innerHTML = zones.slice(0, 10).map(function(z) {
+  // Split into resistance (above) and support (below), nearest first in each group
+  var above = zones.filter(function(z){ return z.price > currentPrice; })
+                   .sort(function(a,b){ return a.price - b.price; }); // nearest resistance first
+  var below = zones.filter(function(z){ return z.price <= currentPrice; })
+                   .sort(function(a,b){ return b.price - a.price; }); // nearest support first
+
+  function srRow(z) {
     var dist = z.price - currentPrice;
     var dStr = (dist >= 0 ? '+' : '') + dist.toFixed(1);
     var col  = z.type === 'resistance' ? 'var(--red)' : z.type === 'support' ? 'var(--green)' : 'var(--gold)';
     var pct  = Math.round(z.strength / 10 * 100);
-    var near = Math.abs(dist) <= latestATR;
+    var near = Math.abs(dist) <= latestATR * 1.5;
     return '<div class="sr-row' + (near ? ' sr-near' : '') + '">' +
       '<div class="sr-price" style="color:' + col + '">' + z.price.toFixed(1) + '</div>' +
-      '<div class="sr-type">' + z.type + (z.isRound ? ' <span class="sr-round">R</span>' : '') + '</div>' +
+      '<div class="sr-type" style="color:' + col + ';opacity:.7">' +
+        (z.type === 'resistance' ? 'RES' : z.type === 'support' ? 'SUP' : 'S/R') +
+        (z.isRound ? ' <span class="sr-round">R</span>' : '') +
+      '</div>' +
       '<div class="sr-bar-wrap"><div class="sr-bar-fill" style="width:' + pct + '%;background:' + col + '"></div></div>' +
       '<div class="sr-meta">' + z.touches + 'T &nbsp;' + dStr + '</div>' +
       '</div>';
-  }).join('');
+  }
+
+  // Show up to 4 resistance, price divider, up to 4 support
+  var resHtml = above.slice(0, 5).reverse().map(srRow).join(''); // farthest → nearest (top to bottom)
+  var supHtml = below.slice(0, 5).map(srRow).join('');           // nearest → farthest (top to bottom)
+
+  var priceDiv = '<div style="display:flex;align-items:center;gap:6px;padding:4px 0;margin:3px 0;border-top:1px dashed rgba(0,229,255,.2);border-bottom:1px dashed rgba(0,229,255,.2)">' +
+    '<span style="font-size:9px;color:var(--muted);letter-spacing:.06em">PRICE</span>' +
+    '<span style="font-size:13px;font-weight:700;color:#00e5ff;font-family:var(--num-font)">' + currentPrice.toFixed(1) + '</span>' +
+  '</div>';
+
+  el.innerHTML = (resHtml || '<div style="color:var(--dim);font-size:10px;padding:4px 0">— no resistance above —</div>') +
+                 priceDiv +
+                 (supHtml || '<div style="color:var(--dim);font-size:10px;padding:4px 0">— no support below —</div>');
 }
 
 // ── Render Trend Panel ───────────────────────────────────────────────────────
@@ -3422,5 +4057,107 @@ function pollMT4Status(sigId) {
       })
       .catch(function() { /* keep polling */ });
   }, 3000);
+}
+
+// ── Drag-to-reorder cards ────────────────────────────────────────────────────
+var _dragCard = null;
+
+function initCardDrag() {
+  var CONTAINERS = ['ana-sidebar-cards', 'ana-main-cards'];
+
+  CONTAINERS.forEach(function(cid) {
+    var container = document.getElementById(cid);
+    if (!container) return;
+
+    // Find all direct draggable cards (those with a drag handle)
+    var cards = container.querySelectorAll(':scope > [id^="dcard-"]');
+
+    cards.forEach(function(card) {
+      var handle = card.querySelector('.card-drag-handle');
+      if (!handle) return;
+
+      // Only enable dragging via the handle
+      handle.addEventListener('mousedown', function() { card.draggable = true; });
+      handle.addEventListener('mouseup',   function() { card.draggable = false; });
+
+      card.addEventListener('dragstart', function(e) {
+        _dragCard = card;
+        e.dataTransfer.effectAllowed = 'move';
+        setTimeout(function() { card.classList.add('card-dragging'); }, 0);
+      });
+
+      card.addEventListener('dragend', function() {
+        card.draggable = false;
+        card.classList.remove('card-dragging');
+        document.querySelectorAll('.card-drag-over').forEach(function(el) {
+          el.classList.remove('card-drag-over');
+        });
+        _dragCard = null;
+        saveCardOrder();
+      });
+
+      card.addEventListener('dragover', function(e) {
+        if (!_dragCard || _dragCard === card) return;
+        if (_dragCard.parentNode !== card.parentNode) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        document.querySelectorAll('.card-drag-over').forEach(function(el) {
+          el.classList.remove('card-drag-over');
+        });
+        card.classList.add('card-drag-over');
+      });
+
+      card.addEventListener('dragleave', function(e) {
+        if (!card.contains(e.relatedTarget)) card.classList.remove('card-drag-over');
+      });
+
+      card.addEventListener('drop', function(e) {
+        if (!_dragCard || _dragCard === card) return;
+        if (_dragCard.parentNode !== card.parentNode) return;
+        e.preventDefault();
+        card.classList.remove('card-drag-over');
+
+        var parent   = card.parentNode;
+        var children = Array.from(parent.querySelectorAll(':scope > [id^="dcard-"]'));
+        var srcIdx   = children.indexOf(_dragCard);
+        var dstIdx   = children.indexOf(card);
+
+        if (srcIdx < dstIdx) {
+          parent.insertBefore(_dragCard, card.nextElementSibling);
+        } else {
+          parent.insertBefore(_dragCard, card);
+        }
+      });
+    });
+  });
+
+  restoreCardOrder();
+}
+
+function saveCardOrder() {
+  var order = {};
+  ['ana-sidebar-cards', 'ana-main-cards'].forEach(function(cid) {
+    var container = document.getElementById(cid);
+    if (!container) return;
+    order[cid] = Array.from(container.querySelectorAll(':scope > [id^="dcard-"]'))
+                      .map(function(c) { return c.id; });
+  });
+  try { localStorage.setItem('wayne_card_order', JSON.stringify(order)); } catch(e) {}
+}
+
+function restoreCardOrder() {
+  try {
+    var raw = localStorage.getItem('wayne_card_order');
+    if (!raw) return;
+    var order = JSON.parse(raw);
+    Object.keys(order).forEach(function(cid) {
+      var container = document.getElementById(cid);
+      if (!container) return;
+      order[cid].forEach(function(id) {
+        var card = document.getElementById(id);
+        if (card && card.parentNode === container) container.appendChild(card);
+      });
+    });
+  } catch(e) {}
 }
 

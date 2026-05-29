@@ -627,6 +627,11 @@ td:first-child { text-align: left; font-weight: 600; font-family: inherit; }
 /* ── Interval + bar-count toolbar ──────────────────────────────────────── */
 .ana-toolbar            { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
 .ana-toolbar-sep        { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
+.ana-refresh-select     { padding: 3px 6px; border-radius: 4px; border: 1px solid var(--border); background: rgba(0,229,255,.05); color: var(--text); font-size: 11px; outline: none; cursor: pointer; }
+.ana-refresh-select:focus { border-color: rgba(0,229,255,.4); }
+.ana-refresh-dot        { width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 6px var(--green); display: none; animation: pulse 2s infinite; }
+.ana-refresh-dot.active { display: inline-block; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
 .ana-tb-label           { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; }
 .ana-itvl-btn, .ana-bars-btn {
   background: rgba(0,229,255,.05);
@@ -948,6 +953,76 @@ td:first-child { text-align: left; font-weight: 600; font-family: inherit; }
 .bot-mread-lbl      { font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
 .bot-mread-val      { font-size: 14px; font-weight: 700; font-family: var(--num-font); color: var(--text); }
 .bot-mread-empty    { grid-column: 1/-1; text-align: center; color: var(--muted); padding: 20px; font-size: 12px; }
+
+/* ── Signal table collapse ───────────────────────────────────────────────── */
+.sig-collapse-bar   { display: flex; align-items: center; gap: 8px; padding: 6px 0 8px; cursor: pointer; user-select: none; }
+.sig-collapse-bar:hover .sig-collapse-arrow { color: var(--cyan); }
+.sig-collapse-count { font-size: 11px; color: var(--muted); flex: 1; }
+.sig-collapse-pills { display: flex; gap: 4px; }
+.sig-cpill          { font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 3px; }
+.sig-cpill-live     { background: rgba(14,203,138,.12); color: var(--green); border: 1px solid rgba(14,203,138,.3); }
+.sig-cpill-pending  { background: rgba(245,185,53,.1);  color: var(--gold);  border: 1px solid rgba(245,185,53,.3); }
+.sig-cpill-done     { background: rgba(92,107,132,.1);  color: var(--muted); border: 1px solid var(--border); }
+.sig-collapse-arrow { font-size: 10px; color: var(--muted); transition: transform .2s; }
+.sig-collapse-arrow.open { transform: rotate(180deg); }
+.sig-table-collapse { overflow: hidden; transition: max-height .25s ease; }
+
+/* ── Swing Trade Lab ─────────────────────────────────────────────────────── */
+.swing-grid         { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
+@media (max-width: 700px) { .swing-grid { grid-template-columns: 1fr; } }
+.swing-section-head { font-size: 9px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin: 10px 0 6px; }
+.swing-section-head:first-child { margin-top: 0; }
+.swing-sess-grid    { display: flex; flex-direction: column; gap: 3px; }
+.swing-sess-row     { display: grid; grid-template-columns: 44px 80px 1fr; align-items: center; gap: 4px; font-size: 11px; padding: 3px 0; }
+.swing-sess-type    { font-size: 9px; font-weight: 700; letter-spacing: .06em; }
+.swing-sess-price   { font-family: var(--num-font); font-weight: 700; }
+.swing-sess-dist    { font-size: 10px; color: var(--muted); }
+.swing-ob-row       { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--border2); font-size: 11px; }
+.swing-ob-row:last-child { border-bottom: none; }
+.swing-ob-type      { font-size: 9px; font-weight: 700; min-width: 56px; }
+.swing-ob-zone      { font-family: var(--num-font); font-weight: 600; flex: 1; }
+.swing-ob-dist      { font-size: 10px; }
+.swing-ob-date      { font-size: 9px; color: var(--dim); }
+.swing-eq-row       { display: flex; align-items: center; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--border2); }
+.swing-eq-row:last-child { border-bottom: none; }
+.swing-setup-card   { background: rgba(0,0,0,.25); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; }
+.swing-setup-card:last-child { margin-bottom: 0; }
+.swing-setup-head   { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.swing-setup-type   { font-size: 12px; font-weight: 700; color: var(--text); flex: 1; }
+.swing-dir-badge    { font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 3px; border: 1px solid; }
+.swing-conf         { font-size: 10px; font-weight: 600; }
+.swing-levels-row   { display: grid; grid-template-columns: repeat(4,1fr); gap: 6px; margin-bottom: 7px; }
+.swing-level        { display: flex; flex-direction: column; gap: 2px; }
+.swing-level-lbl    { font-size: 8px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.swing-level-val    { font-size: 12px; font-weight: 700; font-family: var(--num-font); color: var(--text); }
+.swing-level-val.red  { color: var(--red); }
+.swing-level-val.green { color: var(--green); }
+.swing-level-val small { font-size: 9px; color: var(--muted); font-weight: 400; }
+.swing-note         { font-size: 10px; color: var(--muted); margin-bottom: 8px; line-height: 1.4; }
+.swing-send-btn     { padding: 6px 14px; border-radius: 4px; border: 1px solid rgba(14,203,138,.4); background: rgba(14,203,138,.08); color: var(--green); font-size: 11px; font-weight: 600; cursor: pointer; transition: all .15s; width: 100%; }
+.swing-send-btn:hover { background: rgba(14,203,138,.15); box-shadow: 0 0 10px rgba(14,203,138,.2); }
+.swing-empty        { color: var(--dim); font-size: 11px; padding: 10px 0; }
+
+/* Swing Lab config bar */
+.swing-config-bar   { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 0 10px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.swing-config-group { display: flex; align-items: center; gap: 5px; }
+.swing-config-lbl   { font-size: 9px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+.swing-config-input { width: 58px; padding: 3px 6px; border-radius: 4px; border: 1px solid var(--border); background: rgba(0,0,0,.3); color: var(--text); font-size: 12px; font-family: var(--num-font); outline: none; }
+.swing-config-input:focus { border-color: rgba(0,229,255,.4); }
+.swing-config-select { padding: 3px 6px; border-radius: 4px; border: 1px solid var(--border); background: rgba(0,0,0,.3); color: var(--text); font-size: 11px; outline: none; cursor: pointer; }
+.swing-config-total  { font-size: 13px; font-weight: 700; color: var(--gold); font-family: var(--num-font); }
+.swing-config-sep    { width: 1px; height: 20px; background: var(--border); margin: 0 2px; }
+.swing-config-check  { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--muted); cursor: pointer; }
+.swing-config-check input[type=checkbox] { accent-color: var(--green); width: 13px; height: 13px; }
+
+/* ── Drag-to-reorder cards ───────────────────────────────────────────────── */
+.card-drag-handle   { cursor: grab; color: var(--muted); font-size: 15px; opacity: .3; transition: opacity .15s, color .15s; user-select: none; margin-right: 6px; line-height: 1; flex-shrink: 0; }
+.card-drag-handle:hover { opacity: 1; color: var(--cyan); }
+.card-drag-handle:active { cursor: grabbing; }
+.card-dragging      { opacity: .45; box-shadow: 0 0 0 2px rgba(0,229,255,.4); }
+.card-drag-over     { box-shadow: 0 0 0 2px var(--cyan); background: rgba(0,229,255,.04) !important; }
+#ana-main-cards     { display: flex; flex-direction: column; gap: 10px; }
+.dcard-wrapper      { border-radius: 6px; overflow: hidden; }
 
 /* ── Market Insights Panel ───────────────────────────────────────────────── */
 .ins-grid           { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
