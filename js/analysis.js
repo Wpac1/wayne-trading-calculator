@@ -1316,9 +1316,14 @@ function renderMLPanel() {
 
   if (!m.total || m.total < 5) {
     el.innerHTML = '<div style="color:var(--dim);font-size:11px;padding:4px 0">' +
-      'Mark <strong>' + (5 - m.total) + ' more</strong> trade' + (5 - m.total !== 1 ? 's' : '') +
-      ' as WIN or LOSS in the signal log to activate predictions.</div>' +
-      (m.total > 0 ? '<div style="font-size:10px;color:var(--muted);margin-top:6px">' + m.total + ' sample' + (m.total > 1 ? 's' : '') + ' collected so far.</div>' : '');
+      (m.total > 0
+        ? m.total + ' sample' + (m.total > 1 ? 's' : '') + ' collected — need ' + (5 - m.total) + ' more to activate predictions.'
+        : 'No training data yet. Load your statement and click <strong>Train from Statement</strong>, or mark trades WIN/LOSS in the signal log.') +
+      '</div>' +
+      '<div style="display:flex;gap:8px;margin-top:8px">' +
+        '<button class="ml-reset-btn" onclick="trainMLFromStatement()" style="color:var(--cyan);border-color:rgba(0,229,255,.3)">&#9650; Train from Statement</button>' +
+        (m.total ? '<button class="ml-reset-btn" onclick="resetMLModel()">Reset</button>' : '') +
+      '</div>';
     return;
   }
 
@@ -1355,13 +1360,81 @@ function renderMLPanel() {
       '<div class="ml-feat-head">Factor analysis — current conditions</div>' +
       '<div class="ml-feat-chips">' + (factorHtml || '<span style="color:var(--dim);font-size:10px">No strong factors detected yet — need more trades</span>') + '</div>' +
     '</div>' +
-    '<button class="ml-reset-btn" onclick="resetMLModel()">Reset model</button>';
+    '<div style="display:flex;gap:8px;margin-top:10px">' +
+      '<button class="ml-reset-btn" onclick="trainMLFromStatement()" style="color:var(--cyan);border-color:rgba(0,229,255,.3)">&#9650; Train from Statement</button>' +
+      '<button class="ml-reset-btn" onclick="resetMLModel()">Reset model</button>' +
+    '</div>';
 }
 
 function resetMLModel() {
   if (!confirm('Reset ML model? All learned patterns will be cleared.')) return;
   localStorage.removeItem(ML_KEY);
   renderMLPanel();
+}
+
+// Extract ML features from a statement trade record
+function extractFeaturesFromTrade(t) {
+  var f = {};
+
+  f.dir    = t.type || '?';                            // buy / sell
+  f.symbol = (t.item || '').toUpperCase().split('.')[0] || '?'; // XAUUSD, US30 etc.
+
+  // Session + day from open time
+  var openD = t.openDate ? new Date(t.openDate) : null;
+  if (openD) {
+    var h    = openD.getUTCHours();
+    f.session = h >= 13 && h < 17 ? 'overlap' : h >= 13 && h < 22 ? 'ny' : h >= 7 && h < 13 ? 'london' : 'asian';
+    f.dow     = ['sun','mon','tue','wed','thu','fri','sat'][openD.getDay()];
+  }
+
+  // R:R bucket (from entry/SL/TP)
+  if (t.openPrice && t.sl && t.tp && !isNaN(t.sl) && !isNaN(t.tp)) {
+    var risk   = Math.abs(t.openPrice - t.sl);
+    var reward = Math.abs(t.tp - t.openPrice);
+    if (risk > 0) {
+      var rr = reward / risk;
+      f.rr = rr >= 3 ? '3R+' : rr >= 2 ? '2R' : rr >= 1.5 ? '1.5R' : '1R';
+    }
+  }
+
+  // Hold time bucket
+  if (t.openDate && t.closeDate) {
+    var hrs = (new Date(t.closeDate) - new Date(t.openDate)) / 3600000;
+    f.hold = hrs < 1 ? 'scalp' : hrs < 4 ? 'intraday' : hrs < 24 ? 'swing' : 'multiday';
+  }
+
+  // Whether stop was hit (bad placement / management signal)
+  f.sl_hit = t.isSLHit ? 'yes' : 'no';
+
+  return f;
+}
+
+// Train ML model from all loaded statement trades — bulk import
+function trainMLFromStatement() {
+  var trades = (typeof stmtTrades !== 'undefined' && Array.isArray(stmtTrades)) ? stmtTrades : [];
+
+  if (!trades.length) {
+    alert('No statement loaded. Go to Dashboard → Sync MT4 or Browse a statement file first.');
+    return;
+  }
+
+  // Reset model before bulk import so statement is the clean base
+  if (!confirm('This will reset the current model and retrain from ' + trades.length + ' statement trades. Continue?')) return;
+  localStorage.removeItem(ML_KEY);
+
+  var trained = 0;
+  trades.forEach(function(t) {
+    if (typeof t.isWin === 'undefined' || typeof t.profit === 'undefined') return;
+    var features = extractFeaturesFromTrade(t);
+    var outcome  = t.profit > 0 ? 'WIN' : 'LOSS';
+    trainMLModel(features, outcome);
+    trained++;
+  });
+
+  renderMLPanel();
+  if (typeof showBotToast === 'function') {
+    showBotToast('✓ Trained ML on ' + trained + ' statement trades', 'ok');
+  }
 }
 
 // ── Signal table collapse ─────────────────────────────────────────────────────
