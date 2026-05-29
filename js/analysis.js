@@ -96,10 +96,18 @@ function initAnalysis() {
     ANA_REFRESH_TIMER = setInterval(silentRefresh, ANA_REFRESH_SECS * 1000);
   }
 
-  // Restore bot order type + lot size UI from persisted values
+  // Restore bot order type, lot size, and direction from persisted values
   setBotOrderType(botOrderType);
+  setBotDirection(BOT_DIRECTION);
   var lotEl = document.getElementById('botLotInput');
   if (lotEl) lotEl.value = botLotSize;
+
+  // Restore bot ON/OFF state and cooldown timestamp (survives page refresh)
+  BOT_LAST_SENT_AT = parseInt(localStorage.getItem('wayne_bot_last_sent') || '0') || 0;
+  var botWasOn = localStorage.getItem('wayne_bot_enabled') === '1';
+  if (botWasOn && !BOT_SCAN_TIMER) {
+    toggleBotMaster(true, true); // restore=true keeps cooldown intact
+  }
   if (ANA_SYMBOLS.length) {
     // Symbol list known — just re-render if data is present, else reload
     if (ANA_RAW_M15) {
@@ -1166,6 +1174,196 @@ function renderScoreResult(el, total, grade, cls, verdict, bd, rr, risk, reward)
     '<div class="sc-bd">' + rows + '</div>';
 }
 
+// ── ML Signal Model (Naive Bayes) ─────────────────────────────────────────────
+var ML_KEY = 'wayne_ml_v1';
+
+function getMLModel() {
+  try { var r = localStorage.getItem(ML_KEY); if (r) return JSON.parse(r); } catch(e) {}
+  return { total: 0, wins: 0, feats: {} };
+}
+
+function saveMLModel(m) {
+  try { localStorage.setItem(ML_KEY, JSON.stringify(m)); } catch(e) {}
+}
+
+// Capture current market state as a flat feature map
+function extractMLFeatures(dir) {
+  var f = {};
+  if (!ANA) return f;
+
+  // Direction of the trade
+  f.dir = dir || '?';
+
+  // Trend
+  if (ANA.trend) {
+    f.trend     = ANA.trend.direction;                                // e.g. STRONG BULL
+    f.structure = ANA.trend.structure.split(' ')[0];                  // HH, LH, etc.
+    f.regime    = ANA.trend.regime;                                   // TRENDING / RANGING
+  }
+
+  // RSI bucket
+  var rsiArr = ANA.rsi.filter(function(v){ return v; });
+  var rsiVal = rsiArr[rsiArr.length - 1] || 50;
+  f.rsi = rsiVal > 70 ? 'overbought' : rsiVal < 30 ? 'oversold' : rsiVal > 55 ? 'high' : rsiVal < 45 ? 'low' : 'neutral';
+
+  // AMD phase + direction
+  if (ANA.amd) {
+    f.amd_phase = ANA.amd.phase;
+    f.amd_dir   = ANA.amd.dir || 'none';
+  }
+
+  // Session (UTC hour)
+  var h = new Date().getUTCHours();
+  f.session = h >= 13 && h < 17 ? 'overlap' : h >= 13 && h < 22 ? 'ny' : h >= 7 && h < 13 ? 'london' : 'asian';
+
+  // Day of week (Mon-Fri, Sat/Sun)
+  var dow = ['sun','mon','tue','wed','thu','fri','sat'][new Date().getDay()];
+  f.dow = dow;
+
+  // Timeframe
+  f.tf = ANA_INTERVAL;
+
+  // Symbol
+  f.symbol = (ANA_ACTIVE_SYMBOL || 'XAUUSD').toUpperCase();
+
+  // Trade direction vs trend alignment
+  if (dir && ANA.trend) {
+    var isBull = ANA.trend.total > 0;
+    var isBear = ANA.trend.total < 0;
+    f.trend_align = (dir === 'buy' && isBull) || (dir === 'sell' && isBear) ? 'with' : 'against';
+  }
+
+  return f;
+}
+
+// Train model on one closed trade
+function trainMLModel(mlFeatures, outcome) {
+  if (!mlFeatures || !outcome) return;
+  var isWin = outcome === 'WIN', isLoss = outcome === 'LOSS';
+  if (!isWin && !isLoss) return; // skip BE / CANCEL
+
+  var m = getMLModel();
+  m.total = (m.total || 0) + 1;
+  if (isWin) m.wins = (m.wins || 0) + 1;
+  m.updated = new Date().toISOString();
+  if (!m.feats) m.feats = {};
+
+  Object.keys(mlFeatures).forEach(function(k) {
+    var v = String(mlFeatures[k]);
+    if (!m.feats[k])    m.feats[k]    = {};
+    if (!m.feats[k][v]) m.feats[k][v] = { w: 0, l: 0 };
+    if (isWin)  m.feats[k][v].w++;
+    else        m.feats[k][v].l++;
+  });
+
+  saveMLModel(m);
+  renderMLPanel();
+}
+
+// Predict win probability for a feature set — returns 0-100 or null if < 5 samples
+function predictWinProb(mlFeatures) {
+  var m = getMLModel();
+  if (!m.total || m.total < 5) return null;
+
+  var base = (m.wins || 0) / m.total;
+  // Log-odds form of Naive Bayes (avoids underflow)
+  var logOdds = Math.log((base + 0.01) / (1 - base + 0.01));
+
+  Object.keys(mlFeatures).forEach(function(k) {
+    var v   = String(mlFeatures[k]);
+    var fkv = m.feats && m.feats[k] && m.feats[k][v];
+    if (!fkv) return;
+    var tot = fkv.w + fkv.l;
+    if (tot < 2) return; // need at least 2 obs per feature value
+    var p   = (fkv.w + 0.5) / (tot + 1);      // Laplace smoothed
+    var bf  = Math.log((p + 0.001) / (1 - p + 0.001)) -
+              Math.log((base + 0.01) / (1 - base + 0.01)); // Bayes factor vs base
+    logOdds += bf;
+  });
+
+  var prob = 1 / (1 + Math.exp(-logOdds));
+  return Math.round(prob * 100);
+}
+
+// Feature-level insight — which features push toward win or loss
+function getMLFactors(mlFeatures) {
+  var m = getMLModel();
+  if (!m.total || m.total < 5) return [];
+  var base = (m.wins || 0) / m.total;
+  var factors = [];
+
+  Object.keys(mlFeatures).forEach(function(k) {
+    var v   = String(mlFeatures[k]);
+    var fkv = m.feats && m.feats[k] && m.feats[k][v];
+    if (!fkv) return;
+    var tot = fkv.w + fkv.l;
+    if (tot < 2) return;
+    var p   = (fkv.w + 0.5) / (tot + 1);
+    var edge = (p - base) * 100; // % above or below base win rate
+    factors.push({ key: k, val: v, edge: edge, obs: tot });
+  });
+
+  return factors.sort(function(a, b){ return Math.abs(b.edge) - Math.abs(a.edge); }).slice(0, 8);
+}
+
+function renderMLPanel() {
+  var el = document.getElementById('anaMLPanel');
+  if (!el) return;
+
+  var m     = getMLModel();
+  var badge = document.getElementById('mlModelBadge');
+  if (badge) badge.textContent = (m.total || 0) + ' trade' + (m.total !== 1 ? 's' : '') + ' · ' + Math.round((m.wins||0)/(m.total||1)*100) + '% WR';
+
+  if (!m.total || m.total < 5) {
+    el.innerHTML = '<div style="color:var(--dim);font-size:11px;padding:4px 0">' +
+      'Mark <strong>' + (5 - m.total) + ' more</strong> trade' + (5 - m.total !== 1 ? 's' : '') +
+      ' as WIN or LOSS in the signal log to activate predictions.</div>' +
+      (m.total > 0 ? '<div style="font-size:10px;color:var(--muted);margin-top:6px">' + m.total + ' sample' + (m.total > 1 ? 's' : '') + ' collected so far.</div>' : '');
+    return;
+  }
+
+  var features = ANA ? extractMLFeatures(null) : {};
+  var prob     = predictWinProb(features);
+  var factors  = getMLFactors(features);
+  var winRate  = Math.round((m.wins || 0) / m.total * 100);
+
+  var probCol   = prob >= 65 ? 'var(--green)' : prob >= 45 ? 'var(--gold)' : 'var(--red)';
+  var probLabel = prob >= 65 ? 'FAVOURABLE' : prob >= 45 ? 'NEUTRAL' : 'UNFAVOURABLE';
+
+  var factorHtml = factors.map(function(f) {
+    var cls = f.edge > 5 ? 'ml-feat-chip-pos' : f.edge < -5 ? 'ml-feat-chip-neg' : 'ml-feat-chip-neu';
+    var sign = f.edge > 0 ? '+' : '';
+    return '<span class="ml-feat-chip ' + cls + '" title="' + f.obs + ' observations">' +
+      f.key + ': ' + f.val + ' (' + sign + f.edge.toFixed(0) + '%)' +
+    '</span>';
+  }).join('');
+
+  el.innerHTML =
+    '<div class="ml-top">' +
+      '<div class="ml-prob-dial">' +
+        '<div class="ml-prob-pct" style="color:' + probCol + '">' + (prob !== null ? prob + '%' : '—') + '</div>' +
+        '<div class="ml-prob-label" style="color:' + probCol + '">' + (prob !== null ? probLabel : '') + '</div>' +
+      '</div>' +
+      '<div class="ml-stats-grid">' +
+        '<div class="ml-stat"><span class="ml-stat-lbl">Trades</span><span class="ml-stat-val">' + m.total + '</span></div>' +
+        '<div class="ml-stat"><span class="ml-stat-lbl">Win rate</span><span class="ml-stat-val" style="color:' + (winRate >= 50 ? 'var(--green)' : 'var(--red)') + '">' + winRate + '%</span></div>' +
+        '<div class="ml-stat"><span class="ml-stat-lbl">Features</span><span class="ml-stat-val">' + Object.keys(m.feats || {}).length + '</span></div>' +
+      '</div>' +
+    '</div>' +
+    '<div class="ml-bar-wrap"><div class="ml-bar-fill" style="width:' + (prob || 50) + '%;background:' + probCol + '"></div></div>' +
+    '<div class="ml-features-wrap">' +
+      '<div class="ml-feat-head">Factor analysis — current conditions</div>' +
+      '<div class="ml-feat-chips">' + (factorHtml || '<span style="color:var(--dim);font-size:10px">No strong factors detected yet — need more trades</span>') + '</div>' +
+    '</div>' +
+    '<button class="ml-reset-btn" onclick="resetMLModel()">Reset model</button>';
+}
+
+function resetMLModel() {
+  if (!confirm('Reset ML model? All learned patterns will be cleared.')) return;
+  localStorage.removeItem(ML_KEY);
+  renderMLPanel();
+}
+
 // ── Signal table collapse ─────────────────────────────────────────────────────
 var _sigTableOpen = true;
 var _botLogOpen   = true;
@@ -1379,27 +1577,36 @@ function detectSwingSetups(data, emas, zones, atr, fib, amd) {
   var atrLast = atr.filter(function(v){ return v; }).slice(-1)[0] || 1;
   var obs     = (ANA && ANA.obs) ? ANA.obs : [];
 
+  // TP1 = fixed distance from entry (user-configured, default 50 pts)
+  var tp1Dist = parseFloat((document.getElementById('swingTP1Dist') || {}).value) || 50;
+  function tp1(entry, dir) {
+    return parseFloat((dir === 'buy' ? entry + tp1Dist : entry - tp1Dist).toFixed(1));
+  }
+
   // ── 1. W-Bottom ──────────────────────────────────────────────────────────
   var wp = detectWPattern(data, atrLast);
   if (wp) {
     setups.push({ type: 'W-Bottom', icon: '〓', dir: 'buy', confidence: wp.confidence,
-      entry: wp.entry, sl: wp.sl, tp1: wp.tp1, tp2: wp.tp2, note: wp.note });
+      entry: wp.entry, sl: wp.sl,
+      tp1: tp1(wp.entry, 'buy'),                          // +50 pts quick take
+      tp2: wp.tp2,                                        // full W projection
+      note: wp.note });
   }
 
   // ── 2. Order Block entries ────────────────────────────────────────────────
   obs.forEach(function(ob) {
     if (ob.type === 'bullish' && close > ob.high && Math.abs(close - ob.high) <= atrLast * 6) {
-      var r = Math.abs(ob.high - ob.low) + atrLast * 0.3;
+      var structTP = parseFloat((ob.high + Math.abs(ob.high - ob.low) * 4).toFixed(1));
       setups.push({ type: 'OB Long Entry', icon: '⬜', dir: 'buy', confidence: 72,
         entry: ob.high, sl: parseFloat((ob.low - atrLast * 0.3).toFixed(1)),
-        tp1: parseFloat((ob.high + r * 2).toFixed(1)), tp2: parseFloat((ob.high + r * 3.5).toFixed(1)),
+        tp1: tp1(ob.high, 'buy'), tp2: structTP,
         note: 'Bullish OB ' + ob.low + '–' + ob.high + ' from ' + ob.date + ' — buy the retest' });
     }
     if (ob.type === 'bearish' && close < ob.low && Math.abs(close - ob.low) <= atrLast * 6) {
-      var r = Math.abs(ob.high - ob.low) + atrLast * 0.3;
+      var structTP = parseFloat((ob.low - Math.abs(ob.high - ob.low) * 4).toFixed(1));
       setups.push({ type: 'OB Short Entry', icon: '⬛', dir: 'sell', confidence: 72,
         entry: ob.low, sl: parseFloat((ob.high + atrLast * 0.3).toFixed(1)),
-        tp1: parseFloat((ob.low - r * 2).toFixed(1)), tp2: parseFloat((ob.low - r * 3.5).toFixed(1)),
+        tp1: tp1(ob.low, 'sell'), tp2: structTP,
         note: 'Bearish OB ' + ob.low + '–' + ob.high + ' from ' + ob.date + ' — sell the retest' });
     }
   });
@@ -1410,17 +1617,17 @@ function detectSwingSetups(data, emas, zones, atr, fib, amd) {
       setups.push({ type: 'Liquidity Sweep Long', icon: '◈', dir: 'buy', confidence: 82,
         entry: parseFloat(close.toFixed(1)),
         sl:    parseFloat((amd.manipLevel - atrLast * 0.5).toFixed(1)),
-        tp1:   parseFloat(amd.accumHigh.toFixed(1)),
-        tp2:   parseFloat((amd.accumHigh + (amd.accumHigh - amd.accumLow)).toFixed(1)),
-        note:  'AMD: swept lows at ' + amd.manipLevel.toFixed(1) + '. Range top ' + amd.accumHigh.toFixed(1) + ' is primary target' });
+        tp1:   tp1(close, 'buy'),                         // realistic quick target
+        tp2:   parseFloat(amd.accumHigh.toFixed(1)),      // range top = structure target
+        note:  'AMD: swept lows at ' + amd.manipLevel.toFixed(1) + '. Range top ' + amd.accumHigh.toFixed(1) + ' is full target' });
     }
     if (amd.dir === 'down') {
       setups.push({ type: 'Liquidity Sweep Short', icon: '◈', dir: 'sell', confidence: 82,
         entry: parseFloat(close.toFixed(1)),
         sl:    parseFloat((amd.manipLevel + atrLast * 0.5).toFixed(1)),
-        tp1:   parseFloat(amd.accumLow.toFixed(1)),
-        tp2:   parseFloat((amd.accumLow - (amd.accumHigh - amd.accumLow)).toFixed(1)),
-        note:  'AMD: swept highs at ' + amd.manipLevel.toFixed(1) + '. Range bottom ' + amd.accumLow.toFixed(1) + ' is primary target' });
+        tp1:   tp1(close, 'sell'),
+        tp2:   parseFloat(amd.accumLow.toFixed(1)),
+        note:  'AMD: swept highs at ' + amd.manipLevel.toFixed(1) + '. Range bottom ' + amd.accumLow.toFixed(1) + ' is full target' });
     }
   }
 
@@ -1429,19 +1636,22 @@ function detectSwingSetups(data, emas, zones, atr, fib, amd) {
     [0.382, 0.5, 0.618].forEach(function(ratio) {
       var lev = fib.levels.filter(function(l){ return l.ratio === ratio; })[0];
       if (!lev) return;
-      if (Math.abs(close - lev.price) > atrLast * 2) return; // must be near current price
+      if (Math.abs(close - lev.price) > atrLast * 2) return;
       var nearZ = zones.filter(function(z){ return Math.abs(z.price - lev.price) <= atrLast * 1.2; })[0];
       if (!nearZ) return;
-      var dir = fib.dir === 'retrace-down' ? 'buy' : 'sell';
+      var dir  = fib.dir === 'retrace-down' ? 'buy' : 'sell';
       var conf = Math.min(88, 62 + nearZ.strength * 2.5);
+      var structTP2 = parseFloat((dir === 'buy'
+        ? fib.swingH.price
+        : fib.swingL.price).toFixed(1));
       setups.push({
         type: 'Fib ' + (ratio * 100).toFixed(1) + '% + S/R', icon: '◆',
         dir: dir, confidence: Math.round(conf),
         entry: parseFloat(lev.price.toFixed(1)),
         sl:    parseFloat((dir === 'buy' ? lev.price - atrLast * 1.5 : lev.price + atrLast * 1.5).toFixed(1)),
-        tp1:   parseFloat((dir === 'buy' ? fib.swingH.price : fib.swingL.price).toFixed(1)),
-        tp2:   parseFloat((dir === 'buy' ? fib.swingH.price + (fib.swingH.price - fib.swingL.price) * 0.382 : fib.swingL.price - (fib.swingH.price - fib.swingL.price) * 0.382).toFixed(1)),
-        note: 'Fib ' + (ratio * 100) + '% at ' + lev.price.toFixed(1) + ' + ' + nearZ.type + ' zone (' + nearZ.touches + ' touches, str ' + nearZ.strength + ')',
+        tp1:   tp1(lev.price, dir),                       // fixed pts
+        tp2:   structTP2,                                 // full swing target
+        note: 'Fib ' + (ratio * 100) + '% at ' + lev.price.toFixed(1) + ' + ' + nearZ.type + ' zone (' + nearZ.touches + ' touches)',
       });
     });
   }
@@ -1512,11 +1722,20 @@ function renderSwingLab(setups, sessLevels, obs, eqLevels) {
         var rw1     = riskPts > 0 ? (Math.abs(s.tp1 - s.entry) / riskPts).toFixed(1) : '—';
         var rw2     = riskPts > 0 ? (Math.abs(s.tp2 - s.entry) / riskPts).toFixed(1) : '—';
         var cCol    = s.confidence >= 80 ? 'var(--green)' : s.confidence >= 65 ? 'var(--gold)' : 'var(--muted)';
+        // ML probability for this setup direction
+        var mlFeats = extractMLFeatures(s.dir);
+        var mlProb  = predictWinProb(mlFeats);
+        var mlBadge = mlProb !== null
+          ? ' <span style="font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(0,229,255,.08);color:' +
+            (mlProb >= 60 ? 'var(--green)' : mlProb >= 45 ? 'var(--gold)' : 'var(--red)') +
+            ';border:1px solid rgba(0,229,255,.2)">ML ' + mlProb + '%</span>'
+          : '';
         return '<div class="swing-setup-card">' +
           '<div class="swing-setup-head">' +
             '<span class="swing-setup-type">' + s.icon + ' ' + s.type + '</span>' +
             '<span class="swing-dir-badge" style="color:' + col + ';border-color:' + col + '">' + dirLbl + '</span>' +
             '<span class="swing-conf" style="color:' + cCol + '">' + s.confidence + '% conf.</span>' +
+            mlBadge +
           '</div>' +
           '<div class="swing-levels-row">' +
             '<div class="swing-level"><span class="swing-level-lbl">Entry (LMT)</span><span class="swing-level-val">' + s.entry + '</span></div>' +
@@ -1662,6 +1881,7 @@ function sendSwingToMT4(idx) {
         confluences: {},
         confRequired: 0,
         mt4Status:   null,
+        mlFeatures:  extractMLFeatures(s.dir),
       };
       var sigs = loadSigLog();
       sigs.push(sig);
@@ -2152,6 +2372,7 @@ function buildAnalysis(data) {
 
   patchSigLogWithCollapse();
   updateSigCollapseBar();
+  renderMLPanel();
 
   var cp = data[data.length-1].close;
   var atrLast = atr.filter(function(v){ return v; }).slice(-1)[0];
@@ -3012,9 +3233,12 @@ var BOT_TF_MA    = 20;      // 20 | 50 | 200
 var BOT_LOG        = [];
 var botOrderType   = localStorage.getItem('wayne_bot_order_type') || 'PENDING';
 var botLotSize     = parseFloat(localStorage.getItem('wayne_bot_lot_size') || '0.01') || 0.01;
+var BOT_DIRECTION  = localStorage.getItem('wayne_bot_direction') || 'both'; // 'both'|'buy'|'sell'
 var BOT_SCAN_TIMER = null;           // setInterval handle for auto-scan
 var BOT_SENT_SIGS  = {};             // dedup: key -> timestamp of last dispatch
-var BOT_SCAN_INTERVAL_MS = 30000;    // re-scan every 30 s when bot is ON
+var BOT_SCAN_INTERVAL_MS  = 30000;   // re-scan every 30 s when bot is ON
+var BOT_LAST_SENT_AT      = 0;       // timestamp of last bot dispatch
+var BOT_SEND_COOLDOWN_MS  = 15 * 60 * 1000; // 15 min between any bot sends
 
 // Session limits (reset each time bot is toggled ON)
 var BOT_MAX_TRADES  = 0;   // 0 = unlimited
@@ -3083,11 +3307,19 @@ function logSignal() {
 }
 
 function updateSignalStatus(id, status) {
-  var sigs = loadSigLog().map(function(s) {
+  var all  = loadSigLog();
+  var orig = all.find(function(s){ return s.id === id; });
+  var sigs = all.map(function(s) {
     return s.id === id ? Object.assign({}, s, { status: status }) : s;
   });
   saveSigLog(sigs);
   renderSigLog();
+
+  // Train ML model when a trade is closed as WIN or LOSS
+  if ((status === 'WIN' || status === 'LOSS') && orig && orig.mlFeatures) {
+    trainMLModel(orig.mlFeatures, status);
+  }
+
   // If transitioning to LIVE, immediately fetch the price for that symbol
   if (status === 'LIVE') {
     var sig = sigs.find(function(s){ return s.id === id; });
@@ -3404,29 +3636,39 @@ function renderSigLog() {
 }
 
 // ── Bot master toggle ─────────────────────────────────────────────────────────
-function toggleBotMaster(on) {
+// restore=true → page-refresh restore; don't wipe cooldown or session counters
+function toggleBotMaster(on, restore) {
   BOT_ENABLED = on;
+  localStorage.setItem('wayne_bot_enabled', on ? '1' : '0');
+
   var el = document.getElementById('botMasterStatus');
   if (el) {
     el.textContent = on ? 'ON' : 'OFF';
     el.className   = 'bot-status-badge ' + (on ? 'bot-status-on' : 'bot-status-off');
   }
-  var otWrap = document.getElementById('botOrderTypeWrap');
-  if (otWrap) otWrap.style.display = on ? 'flex' : 'none';
+
+  var sw = document.getElementById('botMasterSwitch');
+  if (sw) sw.checked = !!on;
 
   var limRow = document.getElementById('botLimitsRow');
   if (limRow) limRow.style.display = on ? 'flex' : 'none';
 
   if (on) {
-    // Read session limits at the moment of enabling
-    BOT_TRADE_COUNT = 0;
-    BOT_MAX_TRADES  = parseInt((document.getElementById('botMaxTrades')  || {}).value) || 0;
-    BOT_EXPIRY_TIME = ((document.getElementById('botExpiryTime') || {}).value || '').trim();
-    BOT_LOSS_LIMIT  = parseInt((document.getElementById('botLossLimit')  || {}).value) || 0;
-
-    BOT_SENT_SIGS = {}; // reset dedup on each enable
-    runBotScan();
-    BOT_SCAN_TIMER = setInterval(runBotScan, BOT_SCAN_INTERVAL_MS);
+    if (!restore) {
+      // Fresh manual enable — reset session counters and cooldown
+      BOT_TRADE_COUNT  = 0;
+      BOT_LAST_SENT_AT = 0;
+      localStorage.setItem('wayne_bot_last_sent', '0');
+      BOT_MAX_TRADES  = parseInt((document.getElementById('botMaxTrades')  || {}).value) || 0;
+      BOT_EXPIRY_TIME = ((document.getElementById('botExpiryTime') || {}).value || '').trim();
+      BOT_LOSS_LIMIT  = parseInt((document.getElementById('botLossLimit')  || {}).value) || 0;
+    }
+    // Always reset dedup map so stale keys don't block new signals
+    BOT_SENT_SIGS = {};
+    if (!BOT_SCAN_TIMER) { // guard against double-start on tab switches
+      runBotScan();
+      BOT_SCAN_TIMER = setInterval(runBotScan, BOT_SCAN_INTERVAL_MS);
+    }
   } else {
     if (BOT_SCAN_TIMER) { clearInterval(BOT_SCAN_TIMER); BOT_SCAN_TIMER = null; }
     updateBotStatusBadge();
@@ -3446,6 +3688,54 @@ function setBotLotSize(val) {
   var v = parseFloat(val);
   botLotSize = (v > 0) ? v : 0.01;
   localStorage.setItem('wayne_bot_lot_size', String(botLotSize));
+}
+
+var _recentSigOpen = false;
+
+function toggleRecentSignals() {
+  _recentSigOpen = !_recentSigOpen;
+  var panel = document.getElementById('recentSigPanel');
+  var btn   = document.getElementById('recentSigBtn');
+  if (!panel) return;
+
+  if (!_recentSigOpen) {
+    panel.style.display = 'none';
+    if (btn) btn.style.background = '';
+    return;
+  }
+
+  var sigs = loadSigLog().slice(-5).reverse(); // last 5, newest first
+  if (!sigs.length) {
+    panel.innerHTML = '<div class="recent-sig-empty">No signals logged yet</div>';
+  } else {
+    panel.innerHTML = sigs.map(function(s) {
+      var dirCol = s.dir === 'buy' ? 'var(--green)' : 'var(--red)';
+      var stCol  = s.status === 'WIN' ? 'var(--green)' : s.status === 'LOSS' ? 'var(--red)' :
+                   s.status === 'LIVE' ? 'var(--cyan)' : 'var(--muted)';
+      var dt = s.time ? s.time.substring(5, 16).replace('T', ' ') : '—';
+      return '<div class="recent-sig-row">' +
+        '<span class="recent-sig-time">' + dt + '</span>' +
+        '<span style="font-weight:700;color:' + dirCol + '">' + (s.dir || '').toUpperCase() + '</span>' +
+        '<span style="font-family:var(--num-font)">' + (s.entry || '—') + '</span>' +
+        '<span style="font-family:var(--num-font);color:var(--red)">' + (s.sl || '—') + '</span>' +
+        '<span style="font-family:var(--num-font);color:var(--green)">' + (s.tp || '—') + '</span>' +
+        '<span style="color:' + stCol + ';font-weight:700;font-size:9px">' + (s.status || '—') + '</span>' +
+      '</div>' +
+      '<div style="font-size:9px;color:var(--muted);padding:0 6px 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (s.basis || s.note || '') + '</div>';
+    }).join('');
+  }
+
+  panel.style.display = 'block';
+  if (btn) btn.style.background = 'rgba(0,229,255,.1)';
+}
+
+function setBotDirection(dir) {
+  BOT_DIRECTION = dir;
+  localStorage.setItem('wayne_bot_direction', dir);
+  ['both','buy','sell'].forEach(function(d) {
+    var btn = document.getElementById('botDir' + d.charAt(0).toUpperCase() + d.slice(1));
+    if (btn) btn.classList.toggle('active', d === dir);
+  });
 }
 
 function setBotFeature(key, val)   { BOT_FEATURES[key]   = val; }
@@ -3766,6 +4056,15 @@ function autoBotDispatch() {
   var cooldown = 45 * 60 * 1000; // 45-minute cooldown per unique signal
   var sent     = 0;
 
+  // ── 15-min global cooldown — bot can't send twice in quick succession ──────
+  var msSinceLast = now - BOT_LAST_SENT_AT;
+  if (BOT_LAST_SENT_AT > 0 && msSinceLast < BOT_SEND_COOLDOWN_MS) {
+    var minsLeft = Math.ceil((BOT_SEND_COOLDOWN_MS - msSinceLast) / 60000);
+    var el = document.getElementById('botMasterStatus');
+    if (el) { el.textContent = 'ON · cooldown ' + minsLeft + 'm'; el.className = 'bot-status-badge bot-status-on'; }
+    return;
+  }
+
   // ── Expiry check ──────────────────────────────────────────────────────────
   if (BOT_EXPIRY_TIME) {
     var parts  = BOT_EXPIRY_TIME.split(':');
@@ -3801,9 +4100,11 @@ function autoBotDispatch() {
     }
   }
 
-  // ── Tight entry gate + cooldown ───────────────────────────────────────────
+  // ── Entry gate + direction filter + cooldown ─────────────────────────────
   BOT_LOG.forEach(function(s) {
     if (!passesEntryGate(s)) return;
+    // Skip signals against the allowed direction (BOTH = no filter)
+    if (BOT_DIRECTION !== 'both' && s.dir !== '—' && s.dir !== BOT_DIRECTION) return;
     var key = botSigKey(s);
     if (BOT_SENT_SIGS[key] && (now - BOT_SENT_SIGS[key]) < cooldown) return;
     if (BOT_MAX_TRADES > 0 && BOT_TRADE_COUNT >= BOT_MAX_TRADES) return;
@@ -3831,15 +4132,18 @@ function dispatchBotSignal(s) {
     orderType:    botOrderType,
     basis:        s.strategy + ' — ' + s.signal,
     note:         s.detail || '',
-    status:       'LIVE',         // skip PENDING — bot goes straight to live
+    status:       'LIVE',
     confluences:  blankConf,
     confRequired: CONF_REQUIRED,
     mt4Status:    null,
+    mlFeatures:   extractMLFeatures(s.dir), // capture market state for ML training
   };
   var sigs = loadSigLog();
   sigs.push(sig);
   saveSigLog(sigs);
   BOT_TRADE_COUNT++;
+  BOT_LAST_SENT_AT = Date.now();
+  localStorage.setItem('wayne_bot_last_sent', String(BOT_LAST_SENT_AT)); // survives refresh
   renderSigLog();
   sendSignalToMT4(sig.id);
 }

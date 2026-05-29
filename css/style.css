@@ -954,6 +954,14 @@ td:first-child { text-align: left; font-weight: 600; font-family: inherit; }
 .bot-mread-val      { font-size: 14px; font-weight: 700; font-family: var(--num-font); color: var(--text); }
 .bot-mread-empty    { grid-column: 1/-1; text-align: center; color: var(--muted); padding: 20px; font-size: 12px; }
 
+/* Recent signals mini-panel */
+.recent-sig-row     { display: grid; grid-template-columns: 80px 36px 1fr 1fr 1fr 60px; align-items: center; gap: 6px; padding: 5px 6px; border-radius: 4px; font-size: 11px; border-bottom: 1px solid var(--border2); }
+.recent-sig-row:last-child { border-bottom: none; }
+.recent-sig-row:hover { background: rgba(0,229,255,.03); }
+.recent-sig-time    { font-size: 9px; color: var(--muted); font-family: var(--num-font); }
+.recent-sig-basis   { font-size: 9px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-sig-empty   { padding: 10px 6px; font-size: 11px; color: var(--dim); }
+
 /* ── Signal table collapse ───────────────────────────────────────────────── */
 .sig-collapse-bar   { display: flex; align-items: center; gap: 8px; padding: 6px 0 8px; cursor: pointer; user-select: none; }
 .sig-collapse-bar:hover .sig-collapse-arrow { color: var(--cyan); }
@@ -1014,6 +1022,27 @@ td:first-child { text-align: left; font-weight: 600; font-family: inherit; }
 .swing-config-sep    { width: 1px; height: 20px; background: var(--border); margin: 0 2px; }
 .swing-config-check  { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--muted); cursor: pointer; }
 .swing-config-check input[type=checkbox] { accent-color: var(--green); width: 13px; height: 13px; }
+
+/* ── ML Signal Model ─────────────────────────────────────────────────────── */
+.ml-top             { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.ml-prob-dial       { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 64px; }
+.ml-prob-pct        { font-size: 30px; font-weight: 900; font-family: var(--num-font); line-height: 1; }
+.ml-prob-label      { font-size: 9px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+.ml-stats-grid      { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; flex: 1; }
+.ml-stat            { display: flex; flex-direction: column; gap: 2px; }
+.ml-stat-lbl        { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.ml-stat-val        { font-size: 14px; font-weight: 700; font-family: var(--num-font); }
+.ml-features-wrap   { margin-bottom: 10px; }
+.ml-feat-head       { font-size: 9px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+.ml-feat-chips      { display: flex; flex-wrap: wrap; gap: 4px; }
+.ml-feat-chip       { font-size: 9px; padding: 2px 7px; border-radius: 3px; }
+.ml-feat-chip-pos   { background: rgba(14,203,138,.09); color: var(--green); border: 1px solid rgba(14,203,138,.25); }
+.ml-feat-chip-neg   { background: rgba(246,79,87,.09);  color: var(--red);   border: 1px solid rgba(246,79,87,.25); }
+.ml-feat-chip-neu   { background: rgba(0,229,255,.07);  color: var(--cyan);  border: 1px solid rgba(0,229,255,.2); }
+.ml-bar-wrap        { height: 6px; background: rgba(255,255,255,.06); border-radius: 3px; overflow: hidden; margin: 4px 0 8px; }
+.ml-bar-fill        { height: 100%; border-radius: 3px; transition: width .4s ease; }
+.ml-reset-btn       { font-size: 9px; padding: 2px 8px; border-radius: 3px; border: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer; }
+.ml-reset-btn:hover { color: var(--red); border-color: rgba(246,79,87,.4); }
 
 /* ── Drag-to-reorder cards ───────────────────────────────────────────────── */
 .card-drag-handle   { cursor: grab; color: var(--muted); font-size: 15px; opacity: .3; transition: opacity .15s, color .15s; user-select: none; margin-right: 6px; line-height: 1; flex-shrink: 0; }

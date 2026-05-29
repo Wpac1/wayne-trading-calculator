@@ -544,13 +544,22 @@
             <span class="bot-lot-lbl">Lot</span>
             <input type="number" id="botLotInput" class="bot-lot-input" value="0.01" step="0.01" min="0.01" onchange="setBotLotSize(this.value)">
           </div>
-          <div id="botOrderTypeWrap" class="bot-order-type-wrap" style="display:none">
+          <div id="botOrderTypeWrap" class="bot-order-type-wrap">
             <button id="botOrdPending" class="bot-ord-btn active" onclick="setBotOrderType('PENDING')" title="Pending limit order at entry price">LMT</button>
             <button id="botOrdMarket"  class="bot-ord-btn"        onclick="setBotOrderType('MARKET')"  title="Market order at current price">MKT</button>
           </div>
+          <div id="botDirWrap" class="bot-order-type-wrap" title="Filter bot signals by direction">
+            <button id="botDirBoth" class="bot-ord-btn active" onclick="setBotDirection('both')">BOTH</button>
+            <button id="botDirBuy"  class="bot-ord-btn"        onclick="setBotDirection('buy')">&#9650; BUY</button>
+            <button id="botDirSell" class="bot-ord-btn"        onclick="setBotDirection('sell')">&#9660; SELL</button>
+          </div>
           <button class="bot-scan-btn" onclick="runBotScan()">&#9650; Scan Now</button>
           <button class="bot-test-btn" onclick="testBotSignal()" title="Fire a test signal: LMT 4500 SL 4490 TP 4550">&#9889; Test</button>
+          <button class="bot-test-btn" onclick="toggleRecentSignals()" id="recentSigBtn" title="Show last 5 signals">&#9776; Last 5</button>
         </div>
+
+        <!-- Recent signals mini-panel -->
+        <div id="recentSigPanel" style="display:none;margin-bottom:12px"></div>
 
         <!-- Session limits — shown when bot is ON -->
         <div id="botLimitsRow" class="bot-limits-row" style="display:none">
@@ -679,6 +688,7 @@
           <span style="font-size:9px;color:var(--muted)">TF:</span>
           <select id="swingTFSelect" class="ana-refresh-select" onchange="rerunSwingLab(this.value)" style="font-size:10px">
             <option value="auto">Auto (chart)</option>
+            <option value="M15">M15</option>
             <option value="H1">H1</option>
             <option value="H4" selected>H4</option>
           </select>
@@ -701,6 +711,11 @@
         </div>
         <div class="swing-config-sep"></div>
         <div class="swing-config-group">
+          <span class="swing-config-lbl">TP1 pts</span>
+          <input type="number" id="swingTP1Dist" class="swing-config-input" value="50" step="5" min="5" style="width:50px">
+        </div>
+        <div class="swing-config-sep"></div>
+        <div class="swing-config-group">
           <span class="swing-config-lbl">TP split</span>
           <select id="swingSplit" class="swing-config-select">
             <option value="single">All @ TP1</option>
@@ -716,6 +731,16 @@
       </div>
 
       <div id="swingLabContent"><div class="swing-empty">Load data in Analysis Lab to generate swing setups</div></div>
+    </div>
+
+    <!-- ML Signal Model -->
+    <div class="ana-neon-card" id="dcard-ml">
+      <div class="ana-neon-card-head"><span class="card-drag-handle" title="Drag to reorder">&#x28FF;</span>
+        ML Signal Model
+        <span style="font-size:9px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">Naive Bayes &middot; learns from your WIN/LOSS outcomes &middot; predicts next trade probability</span>
+        <span id="mlModelBadge" style="font-size:9px;color:var(--dim);margin-left:auto">0 trades</span>
+      </div>
+      <div id="anaMLPanel"><div style="color:var(--dim);font-size:11px;padding:4px 0">Mark trades WIN or LOSS in the signal log to train the model. Minimum 5 closed trades to activate predictions.</div></div>
     </div>
 
     </div><!-- /ana-main-cards -->
