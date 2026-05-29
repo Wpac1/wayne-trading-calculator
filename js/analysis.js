@@ -1437,6 +1437,33 @@ function trainMLFromStatement() {
   }
 }
 
+// Predict win probability for any signal — uses stored features if available,
+// falls back to partial features derivable from the signal record itself
+function predictSignalWinProb(sig) {
+  // Full features were captured at dispatch time (bot / swing signals)
+  if (sig.mlFeatures && Object.keys(sig.mlFeatures).length > 3) {
+    return predictWinProb(sig.mlFeatures);
+  }
+  // Partial features — derive from the signal record
+  var f = {};
+  f.dir    = sig.dir || '?';
+  f.symbol = (sig.symbol || '').toUpperCase().split('.')[0] || '?';
+  if (sig.time) {
+    var d = new Date(sig.time);
+    var h = d.getUTCHours();
+    f.session = h >= 13 && h < 17 ? 'overlap' : h >= 13 && h < 22 ? 'ny' : h >= 7 && h < 13 ? 'london' : 'asian';
+    f.dow     = ['sun','mon','tue','wed','thu','fri','sat'][d.getDay()];
+  }
+  if (sig.entry && sig.sl && sig.tp && !isNaN(sig.sl) && !isNaN(sig.tp)) {
+    var risk = Math.abs(sig.entry - sig.sl), reward = Math.abs(sig.tp - sig.entry);
+    if (risk > 0) {
+      var rr = reward / risk;
+      f.rr = rr >= 3 ? '3R+' : rr >= 2 ? '2R' : rr >= 1.5 ? '1.5R' : '1R';
+    }
+  }
+  return predictWinProb(f);
+}
+
 // ── Signal table collapse ─────────────────────────────────────────────────────
 var _sigTableOpen = true;
 var _botLogOpen   = true;
@@ -3371,6 +3398,7 @@ function logSignal() {
     confluences: confluences,
     confRequired: CONF_REQUIRED,
     mt4Status:   null,
+    mlFeatures:  extractMLFeatures(dir), // capture market conditions at log time
   });
   saveSigLog(sigs);
   ['sigEntry','sigSL','sigTP','sigBasis','sigNote'].forEach(function(id) {
@@ -3685,7 +3713,15 @@ function renderSigLog() {
       '<td style="color:' + dirCol + ';font-weight:700">' + s.dir.toUpperCase() + ' ' + ordBadge + '</td>' +
       '<td class="sig-editable" onclick="editSigField(' + s.id + ',\'entry\',this)" title="Click to edit entry">' + s.entry.toFixed(2) + '</td>' +
       '<td class="sig-editable" onclick="editSigField(' + s.id + ',\'sl\',this)"    title="Click to edit SL">'    + s.sl.toFixed(2)    + '</td>' +
-      '<td class="sig-editable" onclick="editSigField(' + s.id + ',\'tp\',this)"    title="Click to edit TP">'    + s.tp.toFixed(2) + ' <small class="sig-rr-tag">' + rr.toFixed(1) + 'R</small></td>' +
+      '<td class="sig-editable" onclick="editSigField(' + s.id + ',\'tp\',this)"    title="Click to edit TP">' +
+        s.tp.toFixed(2) + ' <small class="sig-rr-tag">' + rr.toFixed(1) + 'R</small>' +
+        (function() {
+          var prob = predictSignalWinProb(s);
+          if (prob === null) return '';
+          var col = prob >= 65 ? '#0ecb8a' : prob >= 45 ? '#f5b935' : '#f64f57';
+          return ' <span style="font-size:8px;font-weight:700;color:' + col + ';opacity:.85" title="ML win probability">' + prob + '%</span>';
+        })() +
+      '</td>' +
       '<td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (s.basis||'') + '">' + (s.basis||'—') + '</td>' +
       '<td>' + statusCell + '</td>' +
       '<td class="sig-actions">' +
