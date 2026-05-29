@@ -1023,6 +1023,35 @@ td:first-child { text-align: left; font-weight: 600; font-family: inherit; }
 .swing-config-check  { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--muted); cursor: pointer; }
 .swing-config-check input[type=checkbox] { accent-color: var(--green); width: 13px; height: 13px; }
 
+/* ── ICT Models ──────────────────────────────────────────────────────────── */
+.ict-grid           { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+@media (max-width: 700px) { .ict-grid { grid-template-columns: 1fr; } }
+.ict-section-head   { font-size: 9px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
+.ict-kz-banner      { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; }
+.ict-kz-dot         { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.ict-kz-dot.active  { animation: pulse 1.5s infinite; }
+.ict-kz-name        { font-size: 12px; font-weight: 700; }
+.ict-kz-sub         { font-size: 10px; color: var(--muted); }
+.ict-dr-bar         { height: 8px; background: rgba(255,255,255,.06); border-radius: 4px; position: relative; overflow: visible; margin: 4px 0; }
+.ict-dr-fill-prem   { position: absolute; right: 0; top: 0; height: 100%; background: rgba(246,79,87,.3); border-radius: 0 4px 4px 0; }
+.ict-dr-fill-disc   { position: absolute; left: 0; top: 0; height: 100%; background: rgba(14,203,138,.3); border-radius: 4px 0 0 4px; }
+.ict-dr-cursor      { position: absolute; top: -3px; width: 2px; height: 14px; background: #00e5ff; border-radius: 1px; box-shadow: 0 0 4px #00e5ff; transform: translateX(-50%); }
+.ict-dr-eq          { position: absolute; top: -2px; left: 50%; width: 1px; height: 12px; background: rgba(245,185,53,.5); transform: translateX(-50%); }
+.ict-struct-row     { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--border2); font-size: 11px; }
+.ict-struct-row:last-child { border-bottom: none; }
+.ict-struct-badge   { font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 3px; min-width: 44px; text-align: center; }
+.ict-entry-card     { background: rgba(0,0,0,.25); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; }
+.ict-entry-card:last-child { margin-bottom: 0; }
+.ict-entry-head     { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; flex-wrap: wrap; }
+.ict-entry-type     { font-size: 12px; font-weight: 700; flex: 1; }
+.ict-entry-levels   { display: grid; grid-template-columns: repeat(4,1fr); gap: 6px; margin-bottom: 6px; }
+.ict-level          { display: flex; flex-direction: column; gap: 2px; }
+.ict-level-lbl      { font-size: 8px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.ict-level-val      { font-size: 12px; font-weight: 700; font-family: var(--num-font); }
+.ict-entry-desc     { font-size: 10px; color: var(--muted); margin-bottom: 7px; line-height: 1.4; }
+.ict-send-btn       { padding: 5px 12px; border-radius: 4px; border: 1px solid rgba(0,229,255,.3); background: rgba(0,229,255,.06); color: var(--cyan); font-size: 11px; font-weight: 600; cursor: pointer; width: 100%; transition: all .15s; }
+.ict-send-btn:hover { background: rgba(0,229,255,.12); box-shadow: 0 0 8px rgba(0,229,255,.2); }
+
 /* ── ML Signal Model ─────────────────────────────────────────────────────── */
 .ml-top             { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
 .ml-prob-dial       { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 64px; }

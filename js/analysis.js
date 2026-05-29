@@ -1174,6 +1174,359 @@ function renderScoreResult(el, total, grade, cls, verdict, bd, rr, risk, reward)
     '<div class="sc-bd">' + rows + '</div>';
 }
 
+// ── ICT Models ───────────────────────────────────────────────────────────────
+
+function getCurrentKillZone() {
+  var now = new Date();
+  var h   = now.getUTCHours();
+  var m   = now.getUTCMinutes();
+  var t   = h * 60 + m;
+  var zones = [
+    { name: 'Asian KZ',       start:  1*60, end:  4*60, col: '#8c5aff' },
+    { name: 'London KZ',      start:  7*60, end: 10*60, col: '#f5b935' },
+    { name: 'NY KZ',          start: 13*60, end: 16*60, col: '#0ecb8a' },
+    { name: 'London Close KZ',start: 15*60, end: 17*60, col: '#f5b935' },
+  ];
+  for (var i = 0; i < zones.length; i++) {
+    if (t >= zones[i].start && t < zones[i].end) {
+      var minsLeft = zones[i].end - t;
+      return { name: zones[i].name, col: zones[i].col, active: true,
+               sub: minsLeft + ' min remaining · closes ' + Math.floor(zones[i].end/60) + ':00 UTC' };
+    }
+  }
+  // Find next zone
+  var next = zones.find(function(z){ return z.start > t; }) || zones[0];
+  var minsTo = (next.start > t ? next.start - t : (24*60 - t + next.start));
+  return { name: next.name, col: '#5c6b84', active: false,
+           sub: 'opens in ' + Math.floor(minsTo/60) + 'h ' + (minsTo%60) + 'm' };
+}
+
+function detectBOS_CHoCH(data, swings, atr) {
+  var close   = data[data.length - 1].close;
+  var atrLast = atr.filter(function(v){ return v; }).slice(-1)[0] || 1;
+  var highs   = swings.highs;
+  var lows    = swings.lows;
+  var results = [];
+
+  if (highs.length >= 2) {
+    var lastH = highs[highs.length - 1];
+    var prevH = highs[highs.length - 2];
+    if (close > lastH.price) {
+      var isCHoCH = lows.length >= 2 && lows[lows.length-1].price < lows[lows.length-2].price; // was making LLs
+      results.push({ struct: isCHoCH ? 'CHoCH' : 'BOS', dir: 'bull', price: lastH.price,
+        label: (isCHoCH ? '⚠ CHoCH' : 'BOS') + ' Bullish @ ' + lastH.price.toFixed(1),
+        desc: isCHoCH ? 'Downtrend broken — potential reversal to bullish' : 'Bullish break of structure confirmed — continuation expected' });
+    }
+  }
+
+  if (lows.length >= 2) {
+    var lastL = lows[lows.length - 1];
+    if (close < lastL.price) {
+      var isCHoCH = highs.length >= 2 && highs[highs.length-1].price > highs[highs.length-2].price; // was HH
+      results.push({ struct: isCHoCH ? 'CHoCH' : 'BOS', dir: 'bear', price: lastL.price,
+        label: (isCHoCH ? '⚠ CHoCH' : 'BOS') + ' Bearish @ ' + lastL.price.toFixed(1),
+        desc: isCHoCH ? 'Uptrend broken — potential reversal to bearish' : 'Bearish break of structure confirmed — continuation expected' });
+    }
+  }
+
+  return results;
+}
+
+function detectOTEEntry(data, fib, atr) {
+  if (!fib) return null;
+  var close   = data[data.length - 1].close;
+  var atrLast = atr.filter(function(v){ return v; }).slice(-1)[0] || 1;
+
+  var l618 = fib.levels.filter(function(l){ return l.ratio === 0.618; })[0];
+  var l786 = fib.levels.filter(function(l){ return l.ratio === 0.786; })[0];
+  if (!l618 || !l786) return null;
+
+  var oteTop = Math.max(l618.price, l786.price);
+  var oteBot = Math.min(l618.price, l786.price);
+  var tol    = atrLast * 0.8;
+
+  if (close > oteTop + tol || close < oteBot - tol) return null; // not in OTE zone
+
+  var dir = fib.dir === 'retrace-down' ? 'buy' : 'sell';
+  var sl  = dir === 'buy'
+    ? parseFloat((fib.swingL.price - atrLast * 0.5).toFixed(1))
+    : parseFloat((fib.swingH.price + atrLast * 0.5).toFixed(1));
+  var tp1 = dir === 'buy'
+    ? parseFloat(fib.swingH.price.toFixed(1))
+    : parseFloat(fib.swingL.price.toFixed(1));
+
+  return { type: 'OTE', icon: '◆', dir: dir,
+    entry: parseFloat(close.toFixed(1)), sl: sl, tp1: tp1,
+    tp2: dir === 'buy'
+      ? parseFloat((fib.swingH.price + (fib.swingH.price - fib.swingL.price) * 0.5).toFixed(1))
+      : parseFloat((fib.swingL.price - (fib.swingH.price - fib.swingL.price) * 0.5).toFixed(1)),
+    zone: oteBot.toFixed(1) + ' – ' + oteTop.toFixed(1),
+    desc: 'Price in OTE zone (61.8%–78.6% retrace) · ' + (dir === 'buy' ? 'discount' : 'premium') + ' entry · SL beyond swing ' + (dir === 'buy' ? 'low' : 'high') };
+}
+
+function detectBreakerBlocks(data, atr) {
+  var n       = data.length;
+  var atrLast = atr.filter(function(v){ return v; }).slice(-1)[0] || 1;
+  var close   = data[n - 1].close;
+  var minMove = atrLast * 2.2;
+  var breakers = [];
+
+  for (var i = 4; i < n - 8; i++) {
+    var bullMove = data[i].close - data[i - 3].close;
+    if (bullMove >= minMove) {
+      for (var j = i - 1; j >= Math.max(0, i - 5); j--) {
+        var b = data[j];
+        if (b.close < b.open) {
+          var violated = false;
+          for (var k = i + 1; k < n; k++) { if (data[k].low <= b.low) { violated = true; break; } }
+          if (violated && Math.abs(close - b.high) <= atrLast * 7) {
+            breakers.push({ type: 'bear_breaker', high: parseFloat(b.high.toFixed(1)), low: parseFloat(b.low.toFixed(1)), date: b.date,
+              desc: 'Failed Bull OB → Bearish Breaker (resistance) at ' + b.low.toFixed(1) + '–' + b.high.toFixed(1) });
+          }
+          break;
+        }
+      }
+    }
+    var bearMove = data[i - 3].close - data[i].close;
+    if (bearMove >= minMove) {
+      for (var j = i - 1; j >= Math.max(0, i - 5); j--) {
+        var b = data[j];
+        if (b.close > b.open) {
+          var violated = false;
+          for (var k = i + 1; k < n; k++) { if (data[k].high >= b.high) { violated = true; break; } }
+          if (violated && Math.abs(close - b.low) <= atrLast * 7) {
+            breakers.push({ type: 'bull_breaker', high: parseFloat(b.high.toFixed(1)), low: parseFloat(b.low.toFixed(1)), date: b.date,
+              desc: 'Failed Bear OB → Bullish Breaker (support) at ' + b.low.toFixed(1) + '–' + b.high.toFixed(1) });
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  var seen = {};
+  return breakers.filter(function(br) {
+    var key = br.type + '|' + br.date + '|' + br.low;
+    if (seen[key]) return false; seen[key] = true; return true;
+  }).reverse().slice(0, 4);
+}
+
+function getDealingRange(data, swings) {
+  if (!swings.highs.length || !swings.lows.length) return null;
+  var close = data[data.length - 1].close;
+  var hi = swings.highs.reduce(function(a, b){ return b.price > a.price ? b : a; });
+  var lo = swings.lows.reduce(function(a, b){ return b.price < a.price ? b : a; });
+  var range = hi.price - lo.price;
+  if (range <= 0) return null;
+  var pct = (close - lo.price) / range * 100;
+  return {
+    high: parseFloat(hi.price.toFixed(1)), low: parseFloat(lo.price.toFixed(1)),
+    eq:   parseFloat(((hi.price + lo.price) / 2).toFixed(1)),
+    pct:  Math.round(pct),
+    zone: pct >= 70 ? 'PREMIUM — sell bias' : pct <= 30 ? 'DISCOUNT — buy bias' : pct >= 50 ? 'Above EQ · neutral sell' : 'Below EQ · neutral buy',
+    col:  pct >= 70 ? 'var(--red)' : pct <= 30 ? 'var(--green)' : 'var(--gold)',
+  };
+}
+
+var _ictEntries = [];
+
+function renderICTSection(data, emas, zones, atr, fib, amd) {
+  var el = document.getElementById('anaICT');
+  if (!el) return;
+
+  var n       = data.length;
+  var close   = data[n - 1].close;
+  var atrLast = atr.filter(function(v){ return v; }).slice(-1)[0] || 1;
+  var swings  = findSwings(data.slice(-100), 5);
+
+  var kz      = getCurrentKillZone();
+  var bos     = detectBOS_CHoCH(data, swings, atr);
+  var ote     = detectOTEEntry(data, fib, atr);
+  var breakers = detectBreakerBlocks(data, atr);
+  var dr      = getDealingRange(data, swings);
+
+  // Update kill zone badge in card header
+  var kzBadge = document.getElementById('ictKillZoneBadge');
+  if (kzBadge) {
+    kzBadge.innerHTML = '<span style="display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:3px;background:' +
+      (kz.active ? kz.col + '22' : 'transparent') + ';border:1px solid ' + kz.col + '55">' +
+      '<span style="width:6px;height:6px;border-radius:50%;background:' + kz.col + (kz.active ? ';box-shadow:0 0 4px ' + kz.col : '') + '"></span>' +
+      '<span style="color:' + kz.col + ';font-weight:700">' + kz.name + '</span>' +
+    '</span>';
+  }
+
+  // ── Kill Zone banner ──────────────────────────────────────────────────────
+  var kzHtml = '<div class="ict-kz-banner" style="background:' + kz.col + '11;border:1px solid ' + kz.col + '33">' +
+    '<div class="ict-kz-dot' + (kz.active ? ' active' : '') + '" style="background:' + kz.col + (kz.active ? ';box-shadow:0 0 6px ' + kz.col : '') + '"></div>' +
+    '<div><div class="ict-kz-name" style="color:' + kz.col + '">' + kz.name + (kz.active ? ' ACTIVE' : ' — next') + '</div>' +
+    '<div class="ict-kz-sub">' + kz.sub + '</div></div>' +
+  '</div>';
+
+  // ── Dealing Range ─────────────────────────────────────────────────────────
+  var drHtml = '';
+  if (dr) {
+    var pctClamped = Math.max(0, Math.min(100, dr.pct));
+    drHtml = '<div class="ict-section-head">Dealing Range</div>' +
+      '<div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:2px">' +
+        '<span style="color:var(--green)">' + dr.low + '</span>' +
+        '<span style="color:var(--muted)">EQ ' + dr.eq + '</span>' +
+        '<span style="color:var(--red)">' + dr.high + '</span>' +
+      '</div>' +
+      '<div class="ict-dr-bar">' +
+        '<div class="ict-dr-fill-disc" style="width:30%"></div>' +
+        '<div class="ict-dr-fill-prem" style="width:30%"></div>' +
+        '<div class="ict-dr-eq"></div>' +
+        '<div class="ict-dr-cursor" style="left:' + pctClamped + '%"></div>' +
+      '</div>' +
+      '<div style="font-size:10px;color:' + dr.col + ';font-weight:700;margin-top:3px">' + dr.zone + ' (' + dr.pct + '%)</div>';
+  }
+
+  // ── Market Structure ──────────────────────────────────────────────────────
+  var structHtml = '<div class="ict-section-head" style="margin-top:10px">Market Structure</div>';
+  if (!bos.length) {
+    structHtml += '<div style="color:var(--dim);font-size:10px">No BOS/CHoCH in last 100 bars</div>';
+  } else {
+    structHtml += bos.map(function(b) {
+      var col = b.dir === 'bull' ? 'var(--green)' : 'var(--red)';
+      var bg  = b.dir === 'bull' ? 'rgba(14,203,138,.1)' : 'rgba(246,79,87,.1)';
+      return '<div class="ict-struct-row">' +
+        '<span class="ict-struct-badge" style="background:' + bg + ';color:' + col + ';border:1px solid ' + col + '55">' + b.struct + '</span>' +
+        '<span style="font-size:11px;color:' + col + ';font-weight:600">' + b.label + '</span>' +
+      '</div>' +
+      '<div style="font-size:9px;color:var(--muted);padding:2px 0 6px 52px">' + b.desc + '</div>';
+    }).join('');
+  }
+
+  // ── Breaker Blocks ────────────────────────────────────────────────────────
+  var bkHtml = '<div class="ict-section-head" style="margin-top:10px">Breaker Blocks</div>';
+  if (!breakers.length) {
+    bkHtml += '<div style="color:var(--dim);font-size:10px">No active breaker blocks near price</div>';
+  } else {
+    bkHtml += breakers.map(function(b) {
+      var col = b.type === 'bull_breaker' ? 'var(--green)' : 'var(--red)';
+      var lbl = b.type === 'bull_breaker' ? '▲ Bull Breaker' : '▼ Bear Breaker';
+      return '<div class="ict-struct-row">' +
+        '<span style="font-size:9px;font-weight:700;color:' + col + ';min-width:80px">' + lbl + '</span>' +
+        '<span style="font-size:11px;font-family:var(--num-font);color:' + col + '">' + b.low + ' – ' + b.high + '</span>' +
+        '<span style="font-size:9px;color:var(--muted);margin-left:4px">' + b.date + '</span>' +
+      '</div>';
+    }).join('');
+  }
+
+  // ── ICT Entry setups ──────────────────────────────────────────────────────
+  _ictEntries = [];
+  var entriesHtml = '<div class="ict-section-head" style="margin-top:12px">ICT Entry Setups</div>';
+  var entries = [];
+
+  // OTE Entry
+  if (ote) {
+    entries.push({
+      type: 'OTE Entry', icon: '◆', dir: ote.dir,
+      entry: ote.entry, sl: ote.sl, tp1: ote.tp1, tp2: ote.tp2,
+      desc: ote.desc + (kz.active ? ' · ✓ During ' + kz.name : ''),
+      confidence: kz.active ? 88 : 72,
+    });
+  }
+
+  // Breaker Block entries
+  breakers.forEach(function(b) {
+    var dir    = b.type === 'bull_breaker' ? 'buy' : 'sell';
+    var entry  = dir === 'buy' ? b.high : b.low;
+    var sl     = dir === 'buy' ? parseFloat((b.low - atrLast * 0.3).toFixed(1)) : parseFloat((b.high + atrLast * 0.3).toFixed(1));
+    var risk   = Math.abs(entry - sl);
+    entries.push({
+      type: 'Breaker ' + (dir === 'buy' ? 'Long' : 'Short'), icon: '⬡', dir: dir,
+      entry: parseFloat(entry.toFixed(1)), sl: sl,
+      tp1: parseFloat((dir === 'buy' ? entry + risk * 2 : entry - risk * 2).toFixed(1)),
+      tp2: parseFloat((dir === 'buy' ? entry + risk * 3.5 : entry - risk * 3.5).toFixed(1)),
+      desc: b.desc + (kz.active ? ' · ✓ During ' + kz.name : ''),
+      confidence: kz.active ? 78 : 62,
+    });
+  });
+
+  // AMD-based ICT entry (if in manipulation phase)
+  if (amd && amd.phase === 'MANIPULATION' && amd.manipLevel) {
+    var dir = amd.dir;
+    var entry = parseFloat(close.toFixed(1));
+    var sl    = parseFloat((dir === 'up' ? amd.manipLevel - atrLast * 0.5 : amd.manipLevel + atrLast * 0.5).toFixed(1));
+    entries.push({
+      type: 'Judas Swing / AMD', icon: '◈', dir: dir === 'up' ? 'buy' : 'sell',
+      entry: entry, sl: sl,
+      tp1: parseFloat(amd.accumHigh.toFixed(1)),
+      tp2: parseFloat((dir === 'up' ? amd.accumHigh + (amd.accumHigh - amd.accumLow) * 0.5 : amd.accumLow - (amd.accumHigh - amd.accumLow) * 0.5).toFixed(1)),
+      desc: 'Judas Swing: false move to ' + amd.manipLevel.toFixed(1) + ' took liquidity. Real move expected ' + (dir === 'up' ? 'higher' : 'lower') + '.',
+      confidence: kz.active ? 85 : 70,
+    });
+  }
+
+  if (!entries.length) {
+    entriesHtml += '<div style="color:var(--dim);font-size:10px">No ICT setups active — load H1/H4 data and wait for kill zone alignment</div>';
+  } else {
+    _ictEntries = entries;
+    entriesHtml += entries.map(function(e, idx) {
+      var col    = e.dir === 'buy' ? 'var(--green)' : 'var(--red)';
+      var dirLbl = e.dir === 'buy' ? '▲ LONG' : '▼ SHORT';
+      var risk   = Math.abs(e.entry - e.sl);
+      var rw1    = risk > 0 ? (Math.abs(e.tp1 - e.entry) / risk).toFixed(1) : '—';
+      var rw2    = risk > 0 ? (Math.abs(e.tp2 - e.entry) / risk).toFixed(1) : '—';
+      var cCol   = e.confidence >= 80 ? 'var(--green)' : e.confidence >= 65 ? 'var(--gold)' : 'var(--muted)';
+      var mlProb = predictSignalWinProb({ dir: e.dir, symbol: ANA_ACTIVE_SYMBOL, time: new Date().toISOString(), entry: e.entry, sl: e.sl, tp: e.tp1 });
+      var mlBadge = mlProb !== null ? ' <span style="font-size:9px;color:' + (mlProb>=65?'var(--green)':mlProb>=45?'var(--gold)':'var(--red)') + '">ML ' + mlProb + '%</span>' : '';
+      return '<div class="ict-entry-card">' +
+        '<div class="ict-entry-head">' +
+          '<span class="ict-entry-type">' + e.icon + ' ' + e.type + '</span>' +
+          '<span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:3px;color:' + col + ';border:1px solid ' + col + '55">' + dirLbl + '</span>' +
+          '<span style="font-size:10px;color:' + cCol + '">' + e.confidence + '%' + '</span>' +
+          mlBadge +
+        '</div>' +
+        '<div class="ict-entry-levels">' +
+          '<div class="ict-level"><span class="ict-level-lbl">Entry</span><span class="ict-level-val">' + e.entry + '</span></div>' +
+          '<div class="ict-level"><span class="ict-level-lbl">SL</span><span class="ict-level-val" style="color:var(--red)">' + e.sl + '</span></div>' +
+          '<div class="ict-level"><span class="ict-level-lbl">TP1</span><span class="ict-level-val" style="color:var(--green)">' + e.tp1 + ' <small>1:' + rw1 + 'R</small></span></div>' +
+          '<div class="ict-level"><span class="ict-level-lbl">TP2</span><span class="ict-level-val" style="color:var(--green)">' + e.tp2 + ' <small>1:' + rw2 + 'R</small></span></div>' +
+        '</div>' +
+        '<div class="ict-entry-desc">' + e.desc + '</div>' +
+        '<button class="ict-send-btn" onclick="sendICTEntry(' + idx + ')">&#9654; Send to MT4 as Limit Order</button>' +
+      '</div>';
+    }).join('');
+  }
+
+  el.innerHTML = kzHtml +
+    '<div class="ict-grid"><div>' + drHtml + '</div><div>' + structHtml + bkHtml + '</div></div>' +
+    entriesHtml;
+}
+
+function sendICTEntry(idx) {
+  var e = _ictEntries[idx];
+  if (!e) return;
+  var lotSize   = parseFloat((document.getElementById('swingLotSize')  || {}).value) || 0.02;
+  var positions = parseInt((document.getElementById('swingPositions')  || {}).value) || 1;
+  var sig = {
+    id:          Date.now() + Math.floor(Math.random() * 100),
+    time:        new Date().toISOString(),
+    symbol:      ANA_ACTIVE_SYMBOL || 'XAUUSD',
+    dir:         e.dir,
+    entry:       e.entry,
+    sl:          e.sl,
+    tp:          e.tp1,
+    lot:         parseFloat((lotSize * positions).toFixed(2)),
+    orderType:   'PENDING',
+    basis:       'ICT — ' + e.type,
+    note:        e.desc,
+    status:      'LIVE',
+    confluences: {},
+    confRequired: 0,
+    mt4Status:   null,
+    mlFeatures:  extractMLFeatures(e.dir),
+  };
+  var sigs = loadSigLog();
+  sigs.push(sig);
+  saveSigLog(sigs);
+  sendSignalToMT4(sig.id);
+  showBotToast('✓ ICT ' + e.type + ' sent to MT4 · ' + e.dir.toUpperCase() + ' @ ' + e.entry, 'ok');
+  renderSigLog();
+}
+
 // ── ML Signal Model (Naive Bayes) ─────────────────────────────────────────────
 var ML_KEY = 'wayne_ml_v1';
 
@@ -2451,6 +2804,7 @@ function buildAnalysis(data) {
   renderPatterns(patterns);
   renderFib(fib, data[data.length-1].close);
   renderInsights(data, emas, zones, fib, atr, trend, rsi, amd);
+  renderICTSection(data, emas, zones, atr, fib, amd);
 
   var sessLevels = calcSessionLevels(data);
   var eqLevels   = detectEqualLevels(data, atr);
