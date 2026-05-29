@@ -1,0 +1,25 @@
+# Market data — keep folder structure, ignore actual data files
+data/*.csv
+data/*.json
+data/gold/*.csv
+data/gold/*.json
+data/statement/*.csv
+data/statement/*.htm
+data/statement/*.html
+
+# Bot signal bridge files (MT4 done/error/signal CSVs)
+data/signals/*.csv
+
+# MT4 folder
+mt4/
+
+# Broker statement exports
+trading-activity.xlsx
+DetailedStatement.htm
+DetailedStatement.gif
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/

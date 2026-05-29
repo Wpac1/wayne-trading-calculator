@@ -2,8 +2,9 @@
 
 // ── State ────────────────────────────────────────────────────────────────────
 var ANA = null;
-var ANA_RAW_M15 = null;         // raw bars for the active symbol (used for aggregation)
-var ANA_INTERVAL = 'M15';
+var ANA_RAW_M15 = null;         // raw bars from the loaded file (native TF)
+var ANA_INTERVAL = 'M15';       // current view interval (auto-set from filename)
+var ANA_FILE_TF  = 'M15';       // native TF of the file on disk  e.g. 'H1', 'H4'
 var ANA_BARS = 200;
 var ANA_CLOCK_TIMER = null;
 
@@ -13,6 +14,7 @@ var ANA_ACTIVE_SYMBOL = 'XAUUSD';
 var ANA_VIEW = 'single';        // 'single' | 'multi'
 var ANA_MULTI_LOADED = {};      // file -> bars[] cache
 var ANA_MULTI_SELECTED = {};    // file -> true/false  (which symbols show in multi grid)
+var ANA_REFRESH_TIMER = null;   // silent 5-min background refresh
 
 // Signal price tracking
 var SIG_PRICE_CACHE = {};       // symbol -> { price, ts }
@@ -29,11 +31,37 @@ var CONF_DEFS = [
 var CONF_REQUIRED = 3; // ticked confluences needed to auto-go LIVE
 var ANA_SYNC_SCROLL = null; // saved scroll position during a sync reload
 
+// ── Silent 5-min background refresh ─────────────────────────────────────────
+function silentRefresh() {
+  var view = document.getElementById('view-analysis');
+  if (!view || !view.classList.contains('active')) return; // not on analysis tab
+  if (!ANA_ACTIVE_FILE || ANA_VIEW === 'multi') return;
+
+  // Save scroll so the re-render lands in the same spot
+  ANA_SYNC_SCROLL = window.scrollY || window.pageYOffset || 0;
+
+  fetch('data/gold/' + ANA_ACTIVE_FILE + '?t=' + Date.now()) // bust cache
+    .then(function(r) { return r.ok ? r.text() : Promise.reject(); })
+    .then(function(txt) {
+      var data = parseAnalysisCSV(txt);
+      if (data.length < 30) return;
+      ANA_RAW_M15 = data;
+      ANA_MULTI_LOADED[ANA_ACTIVE_FILE] = data;
+      buildAnalysis(aggregateData(data, ANA_INTERVAL));
+    })
+    .catch(function() {}); // fail silently — don't show any error
+}
+
 // ── Auto-load on tab open ────────────────────────────────────────────────────
 function initAnalysis() {
   startAnaClock();
   updateSessionBadge();
-  renderSigLog(); // restore signal log from localStorage on every tab open
+  renderSigLog();
+
+  // Start silent refresh once — guard prevents stacking on repeated tab switches
+  if (!ANA_REFRESH_TIMER) {
+    ANA_REFRESH_TIMER = setInterval(silentRefresh, 5 * 60 * 1000); // every 5 min
+  }
 
   // Restore bot order type + lot size UI from persisted values
   setBotOrderType(botOrderType);
@@ -147,12 +175,26 @@ function renderSymbolChips() {
   }).join('');
 }
 
+// Derive the native timeframe from a filename like "XAUUSD_H1.csv"
+function fileTFfromName(file) {
+  var tfMap = { M1:1, M5:5, M15:15, M30:30, H1:60, H4:240, D1:1440, W1:10080 };
+  var stem  = file.replace(/\.csv$/i, '');
+  var parts = stem.split('_');
+  var last  = parts[parts.length - 1].toUpperCase();
+  return tfMap[last] !== undefined ? last : 'M15';
+}
+
 function selectSymbol(file, symbol) {
   ANA_ACTIVE_FILE   = file;
   ANA_ACTIVE_SYMBOL = symbol;
   ANA_RAW_M15       = null;
   ANA               = null;
-  BOT_SENT_SIGS     = {}; // reset dedup when symbol changes
+  BOT_SENT_SIGS     = {};
+
+  // Auto-set interval to match the file's native TF — no manual TF selection needed
+  ANA_FILE_TF  = fileTFfromName(file);
+  ANA_INTERVAL = ANA_FILE_TF;
+
   renderSymbolChips();
   loadActiveSymbol();
 }
@@ -439,22 +481,28 @@ function setAnaBars(n) {
 }
 
 // ── Aggregation helpers ──────────────────────────────────────────────────────
-function aggregateData(m15, tf) {
-  if (tf === 'M15') return m15;
-  var barsPerCandle = tf === 'H1' ? 4 : tf === 'H4' ? 16 : 96; // D1 = 96 x M15
+var TF_MINUTES = { M1:1, M5:5, M15:15, M30:30, H1:60, H4:240, D1:1440, W1:10080 };
+
+// Source-aware aggregation: uses ANA_FILE_TF to compute the correct factor.
+// If target is the same or lower than the file's native TF → return as-is.
+function aggregateData(rawData, targetTF) {
+  var srcMins = TF_MINUTES[ANA_FILE_TF]  || 15;
+  var tgtMins = TF_MINUTES[targetTF]     || 15;
+  var factor  = Math.round(tgtMins / srcMins);
+  if (factor <= 1) return rawData; // already at or below target resolution
+
   var out = [];
-  for (var i = 0; i < m15.length; i += barsPerCandle) {
-    var slice = m15.slice(i, i + barsPerCandle);
+  for (var i = 0; i < rawData.length; i += factor) {
+    var slice = rawData.slice(i, i + factor);
     if (!slice.length) continue;
-    var open  = slice[0].open;
-    var close = slice[slice.length-1].close;
-    var high  = Math.max.apply(null, slice.map(function(b){ return b.high; }));
-    var low   = Math.min.apply(null, slice.map(function(b){ return b.low; }));
-    var vol   = slice.reduce(function(s,b){ return s + b.volume; }, 0);
     out.push({
       datetime: slice[0].datetime,
       date:     slice[0].date,
-      open: open, high: high, low: low, close: close, volume: vol,
+      open:     slice[0].open,
+      close:    slice[slice.length - 1].close,
+      high:     Math.max.apply(null, slice.map(function(b){ return b.high; })),
+      low:      Math.min.apply(null, slice.map(function(b){ return b.low; })),
+      volume:   slice.reduce(function(s, b){ return s + b.volume; }, 0),
     });
   }
   return out;
@@ -744,27 +792,87 @@ function scanPatterns(data) {
   var patterns = [];
   var sw  = findSwings(win, 4);
 
-  for (var i = 1; i < wn; i++) {
-    var c = win[i], p = win[i-1];
-    if (c.high < p.high && c.low > p.low) {
-      patterns.push({ name: 'Inside Bar', type: 'neutral', sig: 'medium',
-        barIdx: n - wn + i, date: c.date,
-        desc: 'Consolidation — expect breakout in trend direction' });
-    }
+  // Helpers for zone / confirmation checks
+  var atrLast = ANA && ANA.atr ? (ANA.atr.filter(function(v){ return v; }).slice(-1)[0] || 1) : 1;
+  var zones   = (ANA && ANA.zones) ? ANA.zones : [];
+  var amdPhase = ANA && ANA.amd ? ANA.amd.phase : null;
+
+  function nearZone(price, side) {
+    return zones.some(function(z) {
+      if (Math.abs(z.price - price) > atrLast * 1.6) return false;
+      if (side === 'buy'  && (z.type === 'support'    || z.type === 'both')) return true;
+      if (side === 'sell' && (z.type === 'resistance' || z.type === 'both')) return true;
+      return false;
+    });
   }
 
+  // Checks whether the candle at win[i+1] confirms the expected direction
+  function nextBarConfirms(i, dir) {
+    if (i >= wn - 1) return false; // no next bar yet
+    var next = win[i + 1];
+    var cur  = win[i];
+    if (dir === 'bull') return next.close > Math.max(cur.open, cur.close);
+    if (dir === 'bear') return next.close < Math.min(cur.open, cur.close);
+    return false;
+  }
+
+  // ── Bullish / Bearish Engulfing ─────────────────────────────────────────
   for (var i = 1; i < wn; i++) {
     var c = win[i], p = win[i-1];
     var cB = c.close > c.open, pB = p.close > p.open;
     var cBody = Math.abs(c.close - c.open), pBody = Math.abs(p.close - p.open);
-    if (!cB && pB && c.open > p.close && c.close < p.open && cBody > pBody)
-      patterns.push({ name: 'Bearish Engulfing', type: 'bearish', sig: 'high',
-        barIdx: n-wn+i, date: c.date, desc: 'Strong bearish reversal candle' });
-    if (cB && !pB && c.open < p.close && c.close > p.open && cBody > pBody)
-      patterns.push({ name: 'Bullish Engulfing', type: 'bullish', sig: 'high',
-        barIdx: n-wn+i, date: c.date, desc: 'Strong bullish reversal candle' });
+    if (pBody < 0.001) continue;
+
+    // Bearish engulfing: must be at resistance, body 1.3× previous
+    if (!cB && pB && c.open >= p.close && c.close <= p.open && cBody >= pBody * 1.3) {
+      var atR  = nearZone(c.high, 'sell');
+      var conf = nextBarConfirms(i, 'bear');
+      var inAMD = amdPhase === 'MANIPULATION' && ANA.amd && ANA.amd.dir === 'down';
+      patterns.push({ name: 'Bearish Engulfing', type: 'bearish',
+        sig: (conf && atR) ? 'very high' : conf || atR ? 'high' : 'medium',
+        barIdx: n-wn+i, date: c.date,
+        confirmed: conf, atZone: atR, amdAlign: inAMD,
+        desc: 'Full red body engulfs prior green — sellers took control' +
+              (!atR ? ' · not at a resistance zone, treat with caution' : '') });
+    }
+    // Bullish engulfing: must be at support, body 1.3× previous
+    if (cB && !pB && c.open <= p.close && c.close >= p.open && cBody >= pBody * 1.3) {
+      var atS  = nearZone(c.low, 'buy');
+      var conf = nextBarConfirms(i, 'bull');
+      var inAMD = amdPhase === 'MANIPULATION' && ANA.amd && ANA.amd.dir === 'up';
+      patterns.push({ name: 'Bullish Engulfing', type: 'bullish',
+        sig: (conf && atS) ? 'very high' : conf || atS ? 'high' : 'medium',
+        barIdx: n-wn+i, date: c.date,
+        confirmed: conf, atZone: atS, amdAlign: inAMD,
+        desc: 'Full green body engulfs prior red — buyers took control' +
+              (!atS ? ' · not at a support zone, treat with caution' : '') });
+    }
   }
 
+  // ── Hammer / Bullish Pin Bar ────────────────────────────────────────────
+  for (var i = 0; i < wn; i++) {
+    var b = win[i];
+    var range = b.high - b.low;
+    if (range < 0.001) continue;
+    var body  = Math.abs(b.close - b.open);
+    var lower = Math.min(b.open, b.close) - b.low;
+    var upper = b.high - Math.max(b.open, b.close);
+    // Strict: lower wick >= 62% of range, body <= 28%, lower at least 2.5× upper
+    if (lower >= range * 0.62 && body <= range * 0.28 && lower > upper * 2.5) {
+      var atS  = nearZone(b.low, 'buy');
+      var conf = i < wn - 1 && win[i+1].close > Math.max(b.open, b.close);
+      var inAMD = amdPhase === 'MANIPULATION' && ANA.amd && ANA.amd.dir === 'up';
+      if (atS || conf) { // require at least one confirmation criterion
+        patterns.push({ name: 'Hammer / Pin Bar', type: 'bullish',
+          sig: (conf && atS) ? 'very high' : 'high',
+          barIdx: n-wn+i, date: b.date,
+          confirmed: conf, atZone: atS, amdAlign: inAMD,
+          desc: 'Long lower wick rejects lower prices — bullish reversal signal' });
+      }
+    }
+  }
+
+  // ── Shooting Star / Bearish Pin Bar ────────────────────────────────────
   for (var i = 0; i < wn; i++) {
     var b = win[i];
     var range = b.high - b.low;
@@ -772,53 +880,90 @@ function scanPatterns(data) {
     var body  = Math.abs(b.close - b.open);
     var upper = b.high - Math.max(b.open, b.close);
     var lower = Math.min(b.open, b.close) - b.low;
-    if (lower >= range * 0.58 && body <= range * 0.3 && lower > upper * 2)
-      patterns.push({ name: 'Hammer / Pin Bar', type: 'bullish', sig: 'high',
-        barIdx: n-wn+i, date: b.date, desc: 'Long lower wick — rejection of lower prices' });
-    if (upper >= range * 0.58 && body <= range * 0.3 && upper > lower * 2)
-      patterns.push({ name: 'Shooting Star / Pin Bar', type: 'bearish', sig: 'high',
-        barIdx: n-wn+i, date: b.date, desc: 'Long upper wick — rejection of higher prices' });
+    // Strict: upper wick >= 62%, body <= 28%, upper at least 2.5× lower
+    if (upper >= range * 0.62 && body <= range * 0.28 && upper > lower * 2.5) {
+      var atR  = nearZone(b.high, 'sell');
+      var conf = i < wn - 1 && win[i+1].close < Math.min(b.open, b.close);
+      var inAMD = amdPhase === 'MANIPULATION' && ANA.amd && ANA.amd.dir === 'down';
+      if (atR || conf) { // require at least one
+        patterns.push({ name: 'Shooting Star / Pin Bar', type: 'bearish',
+          sig: (conf && atR) ? 'very high' : 'high',
+          barIdx: n-wn+i, date: b.date,
+          confirmed: conf, atZone: atR, amdAlign: inAMD,
+          desc: 'Long upper wick rejects higher prices — bearish reversal signal' });
+      }
+    }
   }
 
-  for (var i = 0; i < wn; i++) {
+  // ── Doji — only show when confirmed by the following bar ────────────────
+  for (var i = 0; i < wn - 1; i++) {  // wn-1: need next bar for confirmation
     var b = win[i];
     var range = b.high - b.low;
     if (range < 0.001) continue;
-    if (Math.abs(b.close - b.open) / range < 0.08)
-      patterns.push({ name: 'Doji', type: 'neutral', sig: 'medium',
-        barIdx: n-wn+i, date: b.date, desc: 'Indecision candle — supply and demand balanced' });
+    var bodyRatio = Math.abs(b.close - b.open) / range;
+    if (bodyRatio < 0.07) {
+      var next = win[i + 1];
+      var bullConf = next.close > b.high;
+      var bearConf = next.close < b.low;
+      if (!bullConf && !bearConf) continue; // skip unconfirmed dojis
+      var atZ  = nearZone(b.close, bullConf ? 'buy' : 'sell');
+      patterns.push({ name: 'Doji' + (atZ ? ' at Zone' : ''), type: bullConf ? 'bullish' : 'bearish',
+        sig: atZ ? 'high' : 'medium',
+        barIdx: n-wn+i, date: b.date,
+        confirmed: true, atZone: atZ, amdAlign: false,
+        desc: 'Indecision candle confirmed by ' + (bullConf ? 'bullish' : 'bearish') + ' follow-through' });
+    }
   }
 
+  // ── Inside Bar (neutral — only at key zones) ────────────────────────────
+  for (var i = 1; i < wn; i++) {
+    var c = win[i], p = win[i-1];
+    if (c.high < p.high && c.low > p.low) {
+      var atAny = zones.some(function(z) { return Math.abs(z.price - c.close) <= atrLast * 1.5; });
+      if (!atAny) continue; // skip inside bars that aren't at a zone
+      patterns.push({ name: 'Inside Bar', type: 'neutral', sig: 'medium',
+        barIdx: n-wn+i, date: c.date,
+        confirmed: false, atZone: true, amdAlign: false,
+        desc: 'Consolidation at key level — await breakout in trend direction' });
+    }
+  }
+
+  // ── Double Top / Bottom (structure-level — no extra filter needed) ──────
   for (var i = 0; i < sw.highs.length - 1; i++) {
     var h0 = sw.highs[i], h1 = sw.highs[i+1];
     if (h1.index - h0.index < 5) continue;
     if (Math.abs(h1.price - h0.price) / h0.price * 100 < 0.5)
       patterns.push({ name: 'Double Top', type: 'bearish', sig: 'very high',
         barIdx: n-wn+h1.index, date: h1.date,
-        desc: 'Twin peaks near ' + h0.price.toFixed(0) + ' — strong resistance zone' });
+        confirmed: true, atZone: true, amdAlign: false,
+        desc: 'Twin peaks near ' + h0.price.toFixed(0) + ' — strong resistance, reversal likely' });
   }
-
   for (var i = 0; i < sw.lows.length - 1; i++) {
     var l0 = sw.lows[i], l1 = sw.lows[i+1];
     if (l1.index - l0.index < 5) continue;
     if (Math.abs(l1.price - l0.price) / l0.price * 100 < 0.5)
       patterns.push({ name: 'Double Bottom', type: 'bullish', sig: 'very high',
         barIdx: n-wn+l1.index, date: l1.date,
-        desc: 'Twin troughs near ' + l0.price.toFixed(0) + ' — strong support zone' });
+        confirmed: true, atZone: true, amdAlign: false,
+        desc: 'Twin troughs near ' + l0.price.toFixed(0) + ' — strong support, reversal likely' });
   }
 
+  // ── HH/HL and LH/LL Market Structure ────────────────────────────────────
   if (sw.highs.length >= 3 && sw.lows.length >= 3) {
     var hh = sw.highs.slice(-3), ll = sw.lows.slice(-3);
     if (hh[2].price > hh[1].price && hh[1].price > hh[0].price &&
         ll[2].price > ll[1].price && ll[1].price > ll[0].price)
       patterns.push({ name: 'Confirmed HH/HL Structure', type: 'bullish', sig: 'high',
-        barIdx: n-1, date: data[n-1].date, desc: '3 consecutive HH + HL — uptrend confirmed' });
+        barIdx: n-1, date: data[n-1].date, confirmed: true, atZone: false, amdAlign: false,
+        desc: '3 consecutive HH + HL — uptrend structure confirmed' });
     if (hh[2].price < hh[1].price && hh[1].price < hh[0].price &&
         ll[2].price < ll[1].price && ll[1].price < ll[0].price)
       patterns.push({ name: 'Confirmed LH/LL Structure', type: 'bearish', sig: 'high',
-        barIdx: n-1, date: data[n-1].date, desc: '3 consecutive LH + LL — downtrend confirmed' });
+        barIdx: n-1, date: data[n-1].date, confirmed: true, atZone: false, amdAlign: false,
+        desc: '3 consecutive LH + LL — downtrend structure confirmed' });
   }
 
+  // ── RSI Divergence ───────────────────────────────────────────────────────
   if (ANA && ANA.rsi) {
     var rsi = ANA.rsi;
     if (sw.highs.length >= 2) {
@@ -827,7 +972,8 @@ function scanPatterns(data) {
       if (ai0 >= 0 && rsi[ai0] && rsi[ai1] && sh1.price > sh0.price && rsi[ai1] < rsi[ai0])
         patterns.push({ name: 'Bearish RSI Divergence', type: 'bearish', sig: 'high',
           barIdx: ai1, date: data[ai1] ? data[ai1].date : '',
-          desc: 'Price new high, RSI lower — momentum fading, potential reversal' });
+          confirmed: true, atZone: false, amdAlign: false,
+          desc: 'Price new high, RSI lower — momentum fading, reversal risk' });
     }
     if (sw.lows.length >= 2) {
       var sl0 = sw.lows[sw.lows.length-2], sl1 = sw.lows[sw.lows.length-1];
@@ -835,7 +981,8 @@ function scanPatterns(data) {
       if (ai0 >= 0 && rsi[ai0] && rsi[ai1] && sl1.price < sl0.price && rsi[ai1] > rsi[ai0])
         patterns.push({ name: 'Bullish RSI Divergence', type: 'bullish', sig: 'high',
           barIdx: ai1, date: data[ai1] ? data[ai1].date : '',
-          desc: 'Price new low, RSI higher — sellers losing steam' });
+          confirmed: true, atZone: false, amdAlign: false,
+          desc: 'Price new low, RSI higher — sellers losing steam, reversal likely' });
     }
   }
 
@@ -976,6 +1123,432 @@ function renderScoreResult(el, total, grade, cls, verdict, bd, rr, risk, reward)
     '<div class="sc-bd">' + rows + '</div>';
 }
 
+// ── Market Insights ───────────────────────────────────────────────────────────
+
+function calcConfluenceZones(data, emas, zones, fib, atr) {
+  var atrLast = atr.filter(function(v){ return v; }).slice(-1)[0] || 1;
+  var close   = data[data.length - 1].close;
+  var tol     = atrLast * 1.3;
+
+  return zones
+    .filter(function(z){ return Math.abs(z.distPct) <= 6; })
+    .map(function(z) {
+      var tags  = [];
+      var score = z.strength;
+
+      // S/R tag
+      var srLabel = z.type === 'resistance' ? 'RES' : z.type === 'support' ? 'SUP' : 'S/R';
+      tags.push({ txt: srLabel + ' ' + z.touches + 'T', cls: 'ins-conf-tag-sr' });
+
+      // EMA proximity
+      [{ k: 'e20', l: 'EMA20' }, { k: 'e50', l: 'EMA50' }, { k: 'e200', l: 'EMA200' }].forEach(function(e) {
+        var arr = emas[e.k];
+        var v   = arr ? arr[arr.length - 1] : null;
+        if (v && Math.abs(v - z.price) <= tol) {
+          tags.push({ txt: e.l, cls: 'ins-conf-tag-ema' });
+          score += 3;
+        }
+      });
+
+      // Fibonacci proximity
+      if (fib) {
+        fib.levels.forEach(function(l) {
+          if (Math.abs(l.price - z.price) <= tol) {
+            tags.push({ txt: 'Fib ' + l.label, cls: 'ins-conf-tag-fib' });
+            score += 2;
+          }
+        });
+      }
+
+      // Round number
+      var step = close < 2000 ? 25 : 50;
+      var mod  = z.price % step;
+      if (mod < atrLast * 0.35 || (step - mod) < atrLast * 0.35) {
+        tags.push({ txt: 'Round', cls: 'ins-conf-tag-rnd' });
+        score += 1.5;
+      }
+
+      // AMD level match
+      if (ANA && ANA.amd) {
+        var amd = ANA.amd;
+        if (amd.accumHigh && Math.abs(amd.accumHigh - z.price) <= tol) tags.push({ txt: 'AMD H', cls: 'ins-conf-tag-fib' });
+        if (amd.accumLow  && Math.abs(amd.accumLow  - z.price) <= tol) tags.push({ txt: 'AMD L', cls: 'ins-conf-tag-fib' });
+      }
+
+      return {
+        price:   z.price,
+        type:    z.type,
+        dir:     z.price < close ? 'buy' : 'sell',
+        tags:    tags,
+        score:   Math.round(score * 10) / 10,
+        distPct: z.distPct,
+        touches: z.touches,
+      };
+    })
+    .sort(function(a, b){ return b.score - a.score; })
+    .slice(0, 6);
+}
+
+function detectFVGs(data, atr) {
+  var atrLast  = atr.filter(function(v){ return v; }).slice(-1)[0] || 1;
+  var minGap   = atrLast * 0.12;
+  var close    = data[data.length - 1].close;
+  var fvgs     = [];
+  var lookback = Math.min(data.length, 60);
+
+  for (var i = data.length - lookback + 2; i < data.length; i++) {
+    var c0 = data[i - 2], c2 = data[i];
+    // Bullish FVG: gap between c0.high and c2.low (price ran up through a gap)
+    if (c2.low > c0.high + minGap) {
+      fvgs.push({ type: 'bullish', top: c2.low, bottom: c0.high,
+        mid: (c2.low + c0.high) / 2, date: c2.date, barIdx: i,
+        filled: close <= c2.low });
+    }
+    // Bearish FVG: gap between c2.high and c0.low
+    if (c2.high < c0.low - minGap) {
+      fvgs.push({ type: 'bearish', top: c0.low, bottom: c2.high,
+        mid: (c0.low + c2.high) / 2, date: c2.date, barIdx: i,
+        filled: close >= c2.high });
+    }
+  }
+  // Return unfilled FVGs, most recent first
+  return fvgs.filter(function(f){ return !f.filled; }).reverse().slice(0, 5);
+}
+
+function calcKeyRanges(data) {
+  var close = data[data.length - 1].close;
+  function snap(bars) {
+    if (!bars.length) return null;
+    var hi  = Math.max.apply(null, bars.map(function(b){ return b.high; }));
+    var lo  = Math.min.apply(null, bars.map(function(b){ return b.low; }));
+    var rng = hi - lo || 1;
+    var pct = Math.round((close - lo) / rng * 100);
+    return { high: hi, low: lo, mid: (hi + lo) / 2, pct: pct, range: rng };
+  }
+  var today = data.filter(function(d){ return d.date === data[data.length-1].date; });
+  return {
+    r20:   snap(data.slice(-20)),
+    r50:   snap(data.slice(-50)),
+    r100:  snap(data.slice(-100)),
+    today: snap(today),
+  };
+}
+
+function calcBias(trend, rsi, amd, ranges, close) {
+  var score = 0;
+  var factors = [];
+
+  // Trend score (-3 to +3)
+  score += trend.total;
+  if (trend.total > 0) factors.push('Trend ' + trend.direction);
+  else if (trend.total < 0) factors.push('Trend ' + trend.direction);
+
+  // RSI
+  var rsiVal = rsi.filter(function(v){ return v; }).slice(-1)[0] || 50;
+  if (rsiVal < 35)      { score += 1.5; factors.push('RSI oversold ' + rsiVal.toFixed(0)); }
+  else if (rsiVal > 65) { score -= 1.5; factors.push('RSI overbought ' + rsiVal.toFixed(0)); }
+
+  // AMD
+  if (amd) {
+    if ((amd.phase === 'DELIVERY' || amd.phase === 'MANIPULATION') && amd.dir === 'up')   { score += 2; factors.push('AMD bullish phase'); }
+    if ((amd.phase === 'DELIVERY' || amd.phase === 'MANIPULATION') && amd.dir === 'down') { score -= 2; factors.push('AMD bearish phase'); }
+  }
+
+  // Price vs 50-bar range (premium/discount)
+  if (ranges.r50) {
+    var pct = ranges.r50.pct;
+    if (pct <= 25)       { score += 1; factors.push('Deep discount (' + pct + '% of 50-bar range)'); }
+    else if (pct <= 45)  { score += 0.5; factors.push('Discount zone (' + pct + '%)'); }
+    else if (pct >= 75)  { score -= 1; factors.push('Deep premium (' + pct + '% of 50-bar range)'); }
+    else if (pct >= 55)  { score -= 0.5; factors.push('Premium zone (' + pct + '%)'); }
+  }
+
+  var dir, grade, col;
+  if      (score >= 4)  { dir = 'STRONG BUY';  grade = '▲▲'; col = 'var(--green)'; }
+  else if (score >= 2)  { dir = 'BUY BIAS';    grade = '▲';  col = 'var(--green)'; }
+  else if (score >= 0.5){ dir = 'WEAK BULL';   grade = '△';  col = '#6ecf8a'; }
+  else if (score <= -4) { dir = 'STRONG SELL'; grade = '▼▼'; col = 'var(--red)'; }
+  else if (score <= -2) { dir = 'SELL BIAS';   grade = '▼';  col = 'var(--red)'; }
+  else if (score <= -0.5){ dir = 'WEAK BEAR';  grade = '▽';  col = '#e07070'; }
+  else                  { dir = 'NEUTRAL';     grade = '—';  col = 'var(--gold)'; }
+
+  return { dir: dir, grade: grade, col: col, score: score, factors: factors };
+}
+
+function renderInsights(data, emas, zones, fib, atr, trend, rsi, amd) {
+  var el = document.getElementById('anaInsights');
+  if (!el) return;
+
+  var close   = data[data.length - 1].close;
+  var conf    = calcConfluenceZones(data, emas, zones, fib, atr);
+  var fvgs    = detectFVGs(data, atr);
+  var ranges  = calcKeyRanges(data);
+  var bias    = calcBias(trend, rsi, amd, ranges, close);
+
+  // ── Bias banner ────────────────────────────────────────────────────────────
+  var biasBg  = bias.score >= 2 ? 'rgba(14,203,138,.07)' : bias.score <= -2 ? 'rgba(246,79,87,.07)' : 'rgba(245,185,53,.06)';
+  var biasHtml =
+    '<div class="ins-bias" style="background:' + biasBg + ';border:1px solid ' + bias.col.replace('var(--green)','rgba(14,203,138,.3)').replace('var(--red)','rgba(246,79,87,.3)').replace('var(--gold)','rgba(245,185,53,.25)') + '">' +
+      '<div class="ins-bias-grade" style="color:' + bias.col + '">' + bias.grade + '</div>' +
+      '<div class="ins-bias-right">' +
+        '<div class="ins-bias-label" style="color:' + bias.col + '">' + bias.dir + '</div>' +
+        '<div class="ins-bias-sub">' + bias.factors.join(' &middot; ') + '</div>' +
+      '</div>' +
+    '</div>';
+
+  // ── Three-column grid ──────────────────────────────────────────────────────
+  // Column 1: Confluence zones
+  var confRows = conf.length ? conf.map(function(c) {
+    var tagsHtml = c.tags.map(function(t){
+      return '<span class="ins-conf-tag ' + t.cls + '">' + t.txt + '</span>';
+    }).join('');
+    var dirCls  = c.dir === 'buy' ? 'ins-conf-buy' : 'ins-conf-sell';
+    var dirLbl  = c.dir === 'buy' ? '▲ BUY' : '▼ SELL';
+    var dist    = (c.distPct >= 0 ? '+' : '') + c.distPct.toFixed(1) + '%';
+    var priceCol = c.dir === 'buy' ? 'var(--green)' : 'var(--red)';
+    return '<div class="ins-conf-row">' +
+      '<div class="ins-conf-price" style="color:' + priceCol + '">' + c.price.toFixed(1) +
+        '<div style="font-size:8px;color:var(--muted);font-weight:400">' + dist + '</div>' +
+      '</div>' +
+      '<div class="ins-conf-tags">' + tagsHtml + '</div>' +
+      '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px">' +
+        '<span class="ins-conf-score" style="color:' + (c.score >= 12 ? 'var(--green)' : c.score >= 8 ? 'var(--gold)' : 'var(--muted)') + '">' + c.score + '</span>' +
+        '<span class="ins-conf-dir ' + dirCls + '">' + dirLbl + '</span>' +
+      '</div>' +
+    '</div>';
+  }).join('') : '<div style="color:var(--dim);font-size:11px">No high-confluence zones near price</div>';
+
+  // Column 2: FVGs
+  var fvgRows = fvgs.length ? fvgs.map(function(f) {
+    var col  = f.type === 'bullish' ? 'var(--green)' : 'var(--red)';
+    var lbl  = f.type === 'bullish' ? '▲ Bull FVG' : '▼ Bear FVG';
+    var dist = (close - f.mid);
+    var distStr = (dist >= 0 ? '+' : '') + dist.toFixed(1) + ' pts';
+    return '<div class="ins-fvg-row">' +
+      '<div style="display:flex;flex-direction:column;gap:1px">' +
+        '<span style="font-size:8px;color:' + col + ';font-weight:700">' + lbl + '</span>' +
+        '<span class="ins-fvg-zone" style="color:' + col + '">' + f.bottom.toFixed(1) + ' – ' + f.top.toFixed(1) + '</span>' +
+      '</div>' +
+      '<span class="ins-fvg-label">' + f.date + '</span>' +
+      '<span class="ins-fvg-dist" style="color:' + col + '">' + distStr + '</span>' +
+    '</div>';
+  }).join('') : '<div style="color:var(--dim);font-size:11px">No unfilled FVGs in last 60 bars</div>';
+
+  // Column 3: Key ranges with premium/discount bars
+  function rangeBar(r, label) {
+    if (!r) return '';
+    var pctClamped = Math.max(0, Math.min(100, r.pct));
+    var fillCol = pctClamped >= 70 ? '#f64f57' : pctClamped <= 30 ? '#0ecb8a' : '#f5b935';
+    var zone = pctClamped >= 70 ? 'Premium' : pctClamped <= 30 ? 'Discount' : 'Mid-range';
+    return '<div class="ins-range-row">' +
+      '<div class="ins-range-head">' +
+        '<span class="ins-range-lbl">' + label + ' range</span>' +
+        '<span style="font-size:9px;color:' + fillCol + '">' + zone + ' (' + pctClamped + '%)</span>' +
+      '</div>' +
+      '<div class="ins-range-head">' +
+        '<span class="ins-range-lo">' + r.low.toFixed(1) + '</span>' +
+        '<span style="font-size:9px;color:var(--muted)">Mid ' + r.mid.toFixed(1) + '</span>' +
+        '<span class="ins-range-hi">' + r.high.toFixed(1) + '</span>' +
+      '</div>' +
+      '<div class="ins-range-bar">' +
+        '<div class="ins-range-fill" style="width:' + pctClamped + '%;background:' + fillCol + '22"></div>' +
+        '<div class="ins-range-cursor" style="left:' + pctClamped + '%"></div>' +
+      '</div>' +
+      '<div class="ins-range-pct">Δ range: ' + r.range.toFixed(1) + ' pts</div>' +
+    '</div>';
+  }
+
+  var rangesHtml =
+    rangeBar(ranges.today, 'Today\'s') +
+    rangeBar(ranges.r20,   '20-bar') +
+    rangeBar(ranges.r50,   '50-bar') +
+    rangeBar(ranges.r100,  '100-bar');
+
+  el.innerHTML = biasHtml +
+    '<div class="ins-grid">' +
+      '<div>' +
+        '<div class="ins-section-head">Confluence zones</div>' +
+        confRows +
+      '</div>' +
+      '<div>' +
+        '<div class="ins-section-head">Fair Value Gaps (unfilled)</div>' +
+        fvgRows +
+      '</div>' +
+      '<div>' +
+        '<div class="ins-section-head">Key ranges &amp; premium / discount</div>' +
+        rangesHtml +
+      '</div>' +
+    '</div>';
+}
+
+// ── AMD Phase Detection ───────────────────────────────────────────────────────
+function detectAMDPhase(data, atr) {
+  if (!data || data.length < 15) return null;
+
+  var n      = data.length;
+  var winLen = Math.min(n, 120);   // look back up to 120 bars
+  var wData  = data.slice(-winLen);
+  var wn     = wData.length;
+
+  // ── Find most recent quiet (accumulation) period — min 5 bars ────────────
+  var ranges  = wData.map(function(b) { return b.high - b.low; });
+  var sortedR = ranges.slice().sort(function(a, b) { return a - b; });
+  var medRange = sortedR[Math.floor(sortedR.length / 2)];
+  var quietThreshold = medRange * 0.75;
+  var minQuietBars   = 5;   // lowered from 8 so M15/H1 can detect accum
+
+  var accumStart = -1, accumEnd = -1, run = 0;
+  for (var i = wn - 1; i >= 0; i--) {
+    if (ranges[i] <= quietThreshold) {
+      run++;
+      if (run === 1) accumEnd = i;
+      if (run >= minQuietBars) { accumStart = i; break; }
+    } else {
+      if (run > 0 && run < minQuietBars) { run = 0; accumEnd = -1; }
+    }
+  }
+  if (accumStart < 0 && run >= 4) { accumStart = wn - run; } // 4-bar fallback
+  if (accumStart < 0) return null;
+
+  // ── Accumulation range ────────────────────────────────────────────────────
+  var aSlice    = wData.slice(accumStart, (accumEnd >= 0 ? accumEnd : wn - 1) + 1);
+  var accumHigh = Math.max.apply(null, aSlice.map(function(b) { return b.high; }));
+  var accumLow  = Math.min.apply(null, aSlice.map(function(b) { return b.low; }));
+  var accumMid  = (accumHigh + accumLow) / 2;
+
+  var atrLast   = atr.filter(function(v) { return v; }).slice(-1)[0] || 1;
+  var tol       = atrLast * 0.25;
+  var effEnd    = accumEnd >= 0 ? accumEnd : wn - 1;
+  var lastClose = wData[wn - 1].close;
+
+  if (effEnd >= wn - 2) {
+    return {
+      phase: 'ACCUMULATION', dir: null,
+      accumHigh: accumHigh, accumLow: accumLow, accumMid: accumMid,
+      accumStartIdx: n - winLen + accumStart, accumEndIdx: n - winLen + effEnd,
+      manipLevel: null,
+      liquidityZones: [
+        { price: accumHigh, label: 'Sell-side liquidity — stops above range', side: 'above' },
+        { price: accumLow,  label: 'Buy-side liquidity — stops below range',  side: 'below' },
+      ],
+    };
+  }
+
+  var postData    = wData.slice(effEnd + 1);
+  var postHigh    = Math.max.apply(null, postData.map(function(b) { return b.high; }));
+  var postLow     = Math.min.apply(null, postData.map(function(b) { return b.low; }));
+  var spikedAbove = postHigh > accumHigh + tol;
+  var spikedBelow = postLow  < accumLow  - tol;
+  var nowAbove    = lastClose > accumHigh + tol;
+  var nowBelow    = lastClose < accumLow  - tol;
+  var nowInRange  = !nowAbove && !nowBelow;
+
+  var phase, dir, manipLevel, liquidityZones;
+
+  if (spikedBelow && nowAbove) {
+    phase = 'DELIVERY'; dir = 'up'; manipLevel = postLow;
+    liquidityZones = [
+      { price: postLow,   label: 'Manipulation low swept (buy-side liquidity taken)', side: 'below' },
+      { price: accumHigh, label: 'Range top — delivery target / resistance',           side: 'above' },
+    ];
+  } else if (spikedAbove && nowBelow) {
+    phase = 'DELIVERY'; dir = 'down'; manipLevel = postHigh;
+    liquidityZones = [
+      { price: postHigh,  label: 'Manipulation high swept (sell-side liquidity taken)', side: 'above' },
+      { price: accumLow,  label: 'Range bottom — delivery target / support',             side: 'below' },
+    ];
+  } else if (spikedBelow && nowInRange) {
+    phase = 'MANIPULATION'; dir = 'up'; manipLevel = postLow;
+    liquidityZones = [
+      { price: postLow,   label: 'Stop-hunt low — potential long zone', side: 'below' },
+      { price: accumHigh, label: 'Upside target if delivery follows',   side: 'above' },
+    ];
+  } else if (spikedAbove && nowInRange) {
+    phase = 'MANIPULATION'; dir = 'down'; manipLevel = postHigh;
+    liquidityZones = [
+      { price: postHigh,  label: 'Stop-hunt high — potential short zone', side: 'above' },
+      { price: accumLow,  label: 'Downside target if delivery follows',    side: 'below' },
+    ];
+  } else if (nowAbove) {
+    phase = 'DISTRIBUTION'; dir = 'up'; manipLevel = null;
+    liquidityZones = [
+      { price: accumHigh, label: 'Range top — now support (failed break = re-entry)', side: 'below' },
+      { price: accumLow,  label: 'Range bottom — major support',                       side: 'below' },
+    ];
+  } else if (nowBelow) {
+    phase = 'DISTRIBUTION'; dir = 'down'; manipLevel = null;
+    liquidityZones = [
+      { price: accumLow,  label: 'Range bottom — now resistance', side: 'above' },
+      { price: accumHigh, label: 'Range top — major resistance',  side: 'above' },
+    ];
+  } else {
+    phase = 'ACCUMULATION'; dir = null; manipLevel = null;
+    liquidityZones = [
+      { price: accumHigh, label: 'Sell-side liquidity above', side: 'above' },
+      { price: accumLow,  label: 'Buy-side liquidity below',  side: 'below' },
+    ];
+  }
+
+  return {
+    phase: phase, dir: dir,
+    accumHigh: accumHigh, accumLow: accumLow, accumMid: accumMid,
+    accumStartIdx: n - winLen + accumStart, accumEndIdx: n - winLen + effEnd,
+    manipLevel: manipLevel, liquidityZones: liquidityZones,
+  };
+}
+
+function renderAMDPanel(amd) {
+  var el = document.getElementById('anaAMD');
+  if (!el) return;
+  if (!amd) { el.innerHTML = '<div class="amd-empty">Insufficient bars for AMD detection</div>'; return; }
+
+  var phCfg = {
+    ACCUMULATION: { col: '#00e5ff', bg: 'rgba(0,229,255,.08)',  bdr: 'rgba(0,229,255,.25)'  },
+    MANIPULATION: { col: '#f5b935', bg: 'rgba(245,185,53,.08)', bdr: 'rgba(245,185,53,.3)'  },
+    DELIVERY:     { col: '#0ecb8a', bg: 'rgba(14,203,138,.08)', bdr: 'rgba(14,203,138,.3)'  },
+    DISTRIBUTION: { col: '#0ecb8a', bg: 'rgba(14,203,138,.08)', bdr: 'rgba(14,203,138,.3)'  },
+  };
+  var c = phCfg[amd.phase] || phCfg.ACCUMULATION;
+  var dirTag = !amd.dir ? '' : amd.dir === 'up' ? ' ▲ LONG' : ' ▼ SHORT';
+
+  var phDesc = {
+    ACCUMULATION: 'Price consolidating — smart money building positions. Stops resting above the high and below the low.',
+    MANIPULATION: amd.dir === 'up'
+      ? 'False sweep below range — buy-side liquidity taken. Bullish delivery expected: watch for reversal and rally through range.'
+      : 'False spike above range — sell-side liquidity taken. Bearish delivery expected: watch for reversal and drop through range.',
+    DELIVERY: amd.dir === 'up'
+      ? 'Swept lows confirmed, now driving higher. Range top is the delivery target. Stay long until target or reversal.'
+      : 'Swept highs confirmed, now driving lower. Range bottom is the delivery target. Stay short until target or reversal.',
+    DISTRIBUTION: amd.dir === 'up'
+      ? 'Bullish breakout — price above range without sweep. Possible direct distribution higher.'
+      : 'Bearish breakdown — price below range. Possible direct distribution lower.',
+  };
+
+  var zonesHtml = (amd.liquidityZones || []).map(function(z) {
+    var zc = z.side === 'above' ? 'var(--red)' : 'var(--green)';
+    return '<div class="amd-zone-row">' +
+      '<span class="amd-zone-price" style="color:' + zc + '">' + z.price.toFixed(1) + '</span>' +
+      '<span class="amd-zone-label">' + z.label + '</span></div>';
+  }).join('');
+
+  el.innerHTML =
+    '<div class="amd-phase-badge" style="background:' + c.bg + ';border:1px solid ' + c.bdr + ';color:' + c.col + '">' +
+      amd.phase + dirTag + '</div>' +
+    '<div class="amd-desc">' + (phDesc[amd.phase] || '') + '</div>' +
+    '<div class="amd-range-row">' +
+      '<span style="color:var(--muted)">Range</span>' +
+      '<span style="color:var(--red)">' + amd.accumHigh.toFixed(1) + '</span>' +
+      '<span style="color:var(--muted)">&#8596;</span>' +
+      '<span style="color:var(--green)">' + amd.accumLow.toFixed(1) + '</span>' +
+    '</div>' +
+    (amd.manipLevel
+      ? '<div class="amd-manip-row">Manip level: <strong style="color:var(--gold)">' + amd.manipLevel.toFixed(1) + '</strong></div>'
+      : '') +
+    (zonesHtml
+      ? '<div class="amd-zones-head">AMD Liquidity Levels</div><div class="amd-zones">' + zonesHtml + '</div>'
+      : '');
+}
+
 // ── Main Build ───────────────────────────────────────────────────────────────
 function buildAnalysis(data) {
   var closes = data.map(function(d){ return d.close; });
@@ -984,7 +1557,9 @@ function buildAnalysis(data) {
   var rsi    = calcRSI(closes, 14);
   var zones  = detectSRZones(data, atr);
 
-  ANA = { data: data, atr: atr, emas: emas, rsi: rsi, zones: zones, trend: null };
+  var amd  = detectAMDPhase(data, atr);
+  var fvgs = detectFVGs(data, atr);
+  ANA = { data: data, atr: atr, emas: emas, rsi: rsi, zones: zones, trend: null, amd: amd, fvgs: fvgs };
 
   var trend    = analyzeTrend(data, emas, atr);
   ANA.trend    = trend;
@@ -997,9 +1572,11 @@ function buildAnalysis(data) {
 
   renderAnaKpis(data, atr, rsi, trend, zones);
   renderSRList(zones, data[data.length-1].close, atr.filter(function(v){ return v; }).slice(-1)[0]);
+  renderAMDPanel(amd);
   renderTrendPanel(trend);
   renderPatterns(patterns);
   renderFib(fib, data[data.length-1].close);
+  renderInsights(data, emas, zones, fib, atr, trend, rsi, amd);
 
   var cp = data[data.length-1].close;
   var atrLast = atr.filter(function(v){ return v; }).slice(-1)[0];
@@ -1007,27 +1584,7 @@ function buildAnalysis(data) {
     'Current: <strong style="color:var(--gold)">' + cp.toFixed(2) + '</strong> &nbsp;|&nbsp; ATR(14): <strong>' +
     atrLast.toFixed(2) + '</strong>';
 
-  // Show context panel for H1 / H4 / D1
-  var ctxWrap = document.getElementById('anaCtxWrap');
-  var mainLbl = document.getElementById('anaMainLabel');
-  var ctxLbl  = document.getElementById('anaCtxLabel');
-  if (ANA_INTERVAL === 'H1') {
-    ctxWrap.style.display = 'block';
-    mainLbl.firstChild.textContent = 'H1 CHART';
-    ctxLbl.textContent = 'M15 CONTEXT';
-  } else if (ANA_INTERVAL === 'H4') {
-    ctxWrap.style.display = 'block';
-    mainLbl.firstChild.textContent = 'H4 CHART';
-    ctxLbl.textContent = 'H1 CONTEXT';
-  } else if (ANA_INTERVAL === 'D1') {
-    ctxWrap.style.display = 'block';
-    mainLbl.firstChild.textContent = 'D1 CHART';
-    ctxLbl.textContent = 'H4 CONTEXT';
-  } else {
-    ctxWrap.style.display = 'none';
-    mainLbl.firstChild.textContent = ANA_INTERVAL + ' CHART';
-  }
-
+  // Context panel visibility is handled inside drawAllCharts()
   requestAnimationFrame(function() { drawAllCharts(); });
   renderSigLog(); // re-color LIVE rows with fresh price
 }
@@ -1046,34 +1603,33 @@ function drawAllCharts() {
   var swings = findSwings(bars, 5);
   drawNeonChart('anaChart', bars, emaSlice, ANA.atr, ANA.zones, swings, ANA_INTERVAL, ANA.fib);
 
-  // Context chart
-  if (ANA_INTERVAL === 'H1' && ANA_RAW_M15) {
-    var ctxBars = ANA_RAW_M15.slice(-200);
-    var ctxCloses = ctxBars.map(function(d){ return d.close; });
-    var ctxEmas = {
-      e20:  calcEMA(ctxCloses, 20),
-      e50:  calcEMA(ctxCloses, 50),
-      e200: calcEMA(ctxCloses, 200),
-    };
-    var ctxAtr    = calcATR(ctxBars, 14);
-    var ctxSwings = findSwings(ctxBars, 5);
-    drawNeonChart('anaChartCtx', ctxBars, ctxEmas, ctxAtr, ANA.zones, ctxSwings, 'M15');
-  } else if (ANA_INTERVAL === 'H4' && ANA_RAW_M15) {
-    var h1Bars    = aggregateData(ANA_RAW_M15, 'H1');
-    var ctxBars   = h1Bars.slice(-200);
-    var ctxCloses = ctxBars.map(function(d){ return d.close; });
-    var ctxEmas   = { e20: calcEMA(ctxCloses,20), e50: calcEMA(ctxCloses,50), e200: calcEMA(ctxCloses,200) };
-    var ctxAtr    = calcATR(ctxBars, 14);
-    var ctxSwings = findSwings(ctxBars, 5);
-    drawNeonChart('anaChartCtx', ctxBars, ctxEmas, ctxAtr, ANA.zones, ctxSwings, 'H1');
-  } else if (ANA_INTERVAL === 'D1' && ANA_RAW_M15) {
-    var h4Bars    = aggregateData(ANA_RAW_M15, 'H4');
-    var ctxBars   = h4Bars.slice(-200);
+  // Context chart — only when we have a lower-TF file to show as context
+  // (e.g. file=M15 viewing H1 → show M15 raw as context; file=H1 viewing H1 → no context)
+  var srcMins = TF_MINUTES[ANA_FILE_TF]  || 15;
+  var ctxWrap = document.getElementById('anaCtxWrap');
+  var mainLbl = document.getElementById('anaMainLabel');
+  var ctxLbl  = document.getElementById('anaCtxLabel');
+
+  // Determine if a context TF makes sense (one step below current view, above file TF)
+  var ctxTF = null;
+  if (ANA_INTERVAL === 'H1'  && srcMins <= 15)  ctxTF = 'M15';
+  if (ANA_INTERVAL === 'H4'  && srcMins <= 60)  ctxTF = 'H1';
+  if (ANA_INTERVAL === 'D1'  && srcMins <= 240) ctxTF = 'H4';
+
+  if (ctxTF && ANA_RAW_M15) {
+    var ctxRaw    = aggregateData(ANA_RAW_M15, ctxTF);
+    var ctxBars   = ctxRaw.slice(-200);
     var ctxCloses = ctxBars.map(function(d){ return d.close; });
     var ctxEmas   = { e20: calcEMA(ctxCloses,20), e50: calcEMA(ctxCloses,50), e200: calcEMA(ctxCloses,200) };
     var ctxAtr    = calcATR(ctxBars, 14);
     var ctxSwings = findSwings(ctxBars, 5);
-    drawNeonChart('anaChartCtx', ctxBars, ctxEmas, ctxAtr, ANA.zones, ctxSwings, 'H4');
+    if (ctxWrap) ctxWrap.style.display = 'block';
+    if (mainLbl) mainLbl.firstChild.textContent = ANA_INTERVAL + ' CHART';
+    if (ctxLbl)  ctxLbl.textContent = ctxTF + ' CONTEXT';
+    drawNeonChart('anaChartCtx', ctxBars, ctxEmas, ctxAtr, ANA.zones, ctxSwings, ctxTF);
+  } else {
+    if (ctxWrap) ctxWrap.style.display = 'none';
+    if (mainLbl) mainLbl.firstChild.textContent = ANA_INTERVAL + ' CHART';
   }
 
   // Restore scroll position after a sync reload so the user stays in place
@@ -1204,6 +1760,35 @@ function drawNeonChart(canvasId, bars, emas, fullAtr, zones, swings, tf, fib) {
       ctx.restore();
     });
 
+    // ── Fair Value Gaps ───────────────────────────────────────────────────
+    if (ANA && ANA.fvgs && ANA.fvgs.length) {
+      ANA.fvgs.forEach(function(f) {
+        var topY = toY(f.top);
+        var botY = toY(f.bottom);
+        if (botY < pad.top || topY > pad.top + cH) return;
+        topY = Math.max(pad.top, topY);
+        botY = Math.min(pad.top + cH, botY);
+        var fvgCol = f.type === 'bullish' ? 'rgba(14,203,138,' : 'rgba(246,79,87,';
+        ctx.save();
+        ctx.globalAlpha = 0.12;
+        ctx.fillStyle   = fvgCol + '1)';
+        ctx.fillRect(pad.left, topY, cW, botY - topY);
+        ctx.globalAlpha = 0.5;
+        ctx.strokeStyle = fvgCol + '0.6)';
+        ctx.lineWidth   = 0.6;
+        ctx.setLineDash([3, 4]);
+        ctx.beginPath(); ctx.moveTo(pad.left, topY); ctx.lineTo(pad.left + cW, topY); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(pad.left, botY); ctx.lineTo(pad.left + cW, botY); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle   = fvgCol + '0.9)';
+        ctx.font        = '7px Consolas,monospace';
+        ctx.textAlign   = 'left';
+        ctx.globalAlpha = 0.8;
+        ctx.fillText('FVG', pad.left + 3, topY + 9);
+        ctx.restore();
+      });
+    }
+
     // ── Fibonacci levels ──────────────────────────────────────────────────
     if (fib) {
       var currentClose = bars[bars.length - 1].close;
@@ -1318,6 +1903,106 @@ function drawNeonChart(canvasId, bars, emas, fullAtr, zones, swings, tf, fib) {
         ctx.fillText('L', cx, sy + half * 1.2 + 9);
         ctx.restore();
       });
+    }
+
+    // ── AMD Phase overlay ─────────────────────────────────────────────────
+    if (ANA && ANA.amd) {
+      var amd = ANA.amd;
+      var dataLen  = ANA.data.length;
+      var barsLen  = bars.length;
+      var barOffset = dataLen - barsLen;
+
+      var cAS = amd.accumStartIdx - barOffset; // chart index for accum start
+      var cAE = amd.accumEndIdx   - barOffset; // chart index for accum end
+
+      var phaseColors2 = {
+        ACCUMULATION: { fill: 'rgba(0,229,255,.05)',  stroke: 'rgba(0,229,255,.35)',  text: '#00e5ff' },
+        MANIPULATION: { fill: 'rgba(245,185,53,.06)', stroke: 'rgba(245,185,53,.45)', text: '#f5b935' },
+        DELIVERY:     { fill: 'rgba(14,203,138,.05)', stroke: 'rgba(14,203,138,.4)',  text: '#0ecb8a' },
+        DISTRIBUTION: { fill: 'rgba(14,203,138,.04)', stroke: 'rgba(14,203,138,.35)', text: '#0ecb8a' },
+      };
+      var pc2 = phaseColors2[amd.phase] || phaseColors2.ACCUMULATION;
+
+      // Accumulation box (shaded rectangle over that period on the chart)
+      if (cAE >= 0 && cAS < barsLen) {
+        var boxX1 = toX(Math.max(0, cAS)) - bW / 2;
+        var boxX2 = toX(Math.min(barsLen - 1, cAE)) + bW / 2;
+        var boxY1 = toY(amd.accumHigh);
+        var boxY2 = toY(amd.accumLow);
+        ctx.save();
+        ctx.globalAlpha = 1;
+        ctx.fillStyle   = pc2.fill;
+        ctx.fillRect(boxX1, boxY1, boxX2 - boxX1, boxY2 - boxY1);
+        ctx.strokeStyle = pc2.stroke;
+        ctx.lineWidth   = 0.8;
+        ctx.setLineDash([3, 3]);
+        ctx.strokeRect(boxX1, boxY1, boxX2 - boxX1, boxY2 - boxY1);
+        ctx.setLineDash([]);
+        ctx.fillStyle   = pc2.text;
+        ctx.font        = 'bold 7px Consolas,monospace';
+        ctx.textAlign   = 'left';
+        ctx.shadowColor = pc2.text; ctx.shadowBlur = 4;
+        ctx.fillText('ACCUM', boxX1 + 3, boxY1 + 9);
+        ctx.restore();
+      }
+
+      // Range lines extending to current bar (accumHigh / accumLow)
+      var lineStartX = cAE >= 0 ? toX(Math.min(barsLen - 1, cAE)) + bW : pad.left;
+      ctx.save();
+      ctx.strokeStyle = pc2.stroke;
+      ctx.lineWidth   = 0.7;
+      ctx.setLineDash([4, 6]);
+      ctx.globalAlpha = 0.6;
+      var ahY = toY(amd.accumHigh);
+      var alY = toY(amd.accumLow);
+      if (ahY >= pad.top && ahY <= pad.top + cH) {
+        ctx.beginPath(); ctx.moveTo(lineStartX, ahY); ctx.lineTo(pad.left + cW, ahY); ctx.stroke();
+        ctx.fillStyle = pc2.text; ctx.font = '7px Consolas,monospace'; ctx.textAlign = 'left';
+        ctx.fillText('RNG H ' + amd.accumHigh.toFixed(1), pad.left + cW + 5, ahY + 3);
+      }
+      if (alY >= pad.top && alY <= pad.top + cH) {
+        ctx.beginPath(); ctx.moveTo(lineStartX, alY); ctx.lineTo(pad.left + cW, alY); ctx.stroke();
+        ctx.fillStyle = pc2.text; ctx.font = '7px Consolas,monospace'; ctx.textAlign = 'left';
+        ctx.fillText('RNG L ' + amd.accumLow.toFixed(1), pad.left + cW + 5, alY + 3);
+      }
+      ctx.setLineDash([]);
+      ctx.restore();
+
+      // Manipulation level (orange dashed line)
+      if (amd.manipLevel) {
+        var mY = toY(amd.manipLevel);
+        if (mY >= pad.top && mY <= pad.top + cH) {
+          ctx.save();
+          ctx.strokeStyle = 'rgba(246,79,87,.75)';
+          ctx.lineWidth   = 1;
+          ctx.setLineDash([3, 4]);
+          ctx.shadowColor = 'rgba(246,79,87,.4)'; ctx.shadowBlur = 4;
+          ctx.beginPath(); ctx.moveTo(pad.left, mY); ctx.lineTo(pad.left + cW, mY); ctx.stroke();
+          ctx.setLineDash([]); ctx.shadowBlur = 0;
+          ctx.fillStyle = '#f64f57';
+          ctx.font = 'bold 7px Consolas,monospace'; ctx.textAlign = 'left';
+          ctx.fillText('MANIP ' + amd.manipLevel.toFixed(1), pad.left + cW + 5, mY + 3);
+          ctx.restore();
+        }
+      }
+
+      // Phase label badge at top-right of chart
+      ctx.save();
+      var phLabel = amd.phase + (amd.dir ? (amd.dir === 'up' ? ' ▲' : ' ▼') : '');
+      ctx.font = 'bold 8px Consolas,monospace';
+      var lblW = ctx.measureText(phLabel).width + 10;
+      var lblX = pad.left + cW - lblW - 2;
+      var lblY = pad.top + 4;
+      ctx.fillStyle   = pc2.fill.replace('.05', '.18').replace('.06', '.2').replace('.04', '.16');
+      ctx.strokeStyle = pc2.stroke;
+      ctx.lineWidth   = 0.7;
+      ctx.fillRect(lblX, lblY, lblW, 12);
+      ctx.strokeRect(lblX, lblY, lblW, 12);
+      ctx.fillStyle   = pc2.text;
+      ctx.textAlign   = 'left';
+      ctx.shadowColor = pc2.text; ctx.shadowBlur = 4;
+      ctx.fillText(phLabel, lblX + 5, lblY + 9);
+      ctx.restore();
     }
 
     // ── Current price dashed line ─────────────────────────────────────────
@@ -1573,16 +2258,24 @@ function renderPatterns(patterns) {
   el.innerHTML = patterns.map(function(p) {
     var col  = p.type === 'bullish' ? 'var(--green)' : p.type === 'bearish' ? 'var(--red)' : 'var(--gold)';
     var icon = p.type === 'bullish' ? '&#x25B2;' : p.type === 'bearish' ? '&#x25BC;' : '&#x25A0;';
-    var sigC = p.sig === 'very high' ? 'color:var(--red)' : p.sig === 'high' ? 'color:var(--gold)' : 'color:var(--muted)';
-    // Pull full datetime from the bar so we can show time too
+    var sigC = p.sig === 'very high' ? 'color:var(--green)' : p.sig === 'high' ? 'color:var(--gold)' : 'color:var(--muted)';
     var barDt = (ANA && ANA.data && ANA.data[p.barIdx]) ? (ANA.data[p.barIdx].datetime || ANA.data[p.barIdx].date || '') : p.date;
-    var timePart = barDt.substring(11, 16); // "HH:MM" or empty for daily
+    var timePart  = barDt.substring(11, 16);
     var dateLabel = p.date + (timePart ? ' <span style="color:var(--cyan);opacity:.8">' + timePart + '</span>' : '');
+
+    // Confirmation + context badges
+    var badges = '';
+    if (p.confirmed)  badges += '<span class="pat-badge pat-badge-confirmed">&#10003; confirmed</span>';
+    else              badges += '<span class="pat-badge pat-badge-unconfirmed">&#8987; pending</span>';
+    if (p.atZone)     badges += '<span class="pat-badge pat-badge-zone">S/R zone</span>';
+    if (p.amdAlign)   badges += '<span class="pat-badge pat-badge-amd">AMD</span>';
+
     return '<div class="pattern-row">' +
       '<span class="pattern-icon" style="color:' + col + '">' + icon + '</span>' +
       '<div class="pattern-body">' +
         '<div class="pattern-name" style="color:' + col + '">' + p.name +
-          ' <span style="font-size:10px;' + sigC + '">' + p.sig + '</span></div>' +
+          ' <span style="font-size:9px;' + sigC + '">' + p.sig + '</span></div>' +
+        '<div class="pattern-badges">' + badges + '</div>' +
         '<div class="pattern-desc">' + p.desc + '</div>' +
         '<div class="pattern-date">' + dateLabel + '</div>' +
       '</div></div>';
@@ -1676,13 +2369,23 @@ function calcMACD(closes, fast, slow, sigPeriod) {
 // ── Bot / Signals — state ─────────────────────────────────────────────────────
 var BOT_ENABLED    = false;
 var BOT_FEATURES   = { rangeDetect: true, rsiSignals: true, macdCross: true, swingFlags: true };
-var BOT_STRATEGIES = { rsiBounce: false, macdEntry: false, structBreak: false, rangeFade: false, asiaBreakout: false };
+var BOT_STRATEGIES = { rsiBounce: false, macdEntry: false, structBreak: false, rangeFade: false, asiaBreakout: false, trendFollower: false };
+
+// Trend Follower parameters
+var BOT_TF_TREND = 'auto';  // 'auto' | 'up' | 'down'
+var BOT_TF_MA    = 20;      // 20 | 50 | 200
 var BOT_LOG        = [];
 var botOrderType   = localStorage.getItem('wayne_bot_order_type') || 'PENDING';
 var botLotSize     = parseFloat(localStorage.getItem('wayne_bot_lot_size') || '0.01') || 0.01;
 var BOT_SCAN_TIMER = null;           // setInterval handle for auto-scan
 var BOT_SENT_SIGS  = {};             // dedup: key -> timestamp of last dispatch
 var BOT_SCAN_INTERVAL_MS = 30000;    // re-scan every 30 s when bot is ON
+
+// Session limits (reset each time bot is toggled ON)
+var BOT_MAX_TRADES  = 0;   // 0 = unlimited
+var BOT_EXPIRY_TIME = '';  // '' = no expiry  e.g. '17:00'
+var BOT_LOSS_LIMIT  = 0;   // 0 = no limit — consecutive losses before auto-disable
+var BOT_TRADE_COUNT = 0;   // trades dispatched this session
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
 function showBotTab(tab) {
@@ -2076,7 +2779,16 @@ function toggleBotMaster(on) {
   var otWrap = document.getElementById('botOrderTypeWrap');
   if (otWrap) otWrap.style.display = on ? 'flex' : 'none';
 
+  var limRow = document.getElementById('botLimitsRow');
+  if (limRow) limRow.style.display = on ? 'flex' : 'none';
+
   if (on) {
+    // Read session limits at the moment of enabling
+    BOT_TRADE_COUNT = 0;
+    BOT_MAX_TRADES  = parseInt((document.getElementById('botMaxTrades')  || {}).value) || 0;
+    BOT_EXPIRY_TIME = ((document.getElementById('botExpiryTime') || {}).value || '').trim();
+    BOT_LOSS_LIMIT  = parseInt((document.getElementById('botLossLimit')  || {}).value) || 0;
+
     BOT_SENT_SIGS = {}; // reset dedup on each enable
     runBotScan();
     BOT_SCAN_TIMER = setInterval(runBotScan, BOT_SCAN_INTERVAL_MS);
@@ -2103,6 +2815,16 @@ function setBotLotSize(val) {
 
 function setBotFeature(key, val)   { BOT_FEATURES[key]   = val; }
 function setBotStrategy(key, val)  { BOT_STRATEGIES[key] = val; }
+
+function toggleTrendFollowerParams(on) {
+  var el = document.getElementById('trendFollowerParams');
+  if (el) el.style.display = on ? 'flex' : 'none';
+}
+
+function readTrendFollowerParams() {
+  BOT_TF_TREND = (document.getElementById('tfTrend') || {}).value || 'auto';
+  BOT_TF_MA    = parseInt((document.getElementById('tfMA') || {}).value) || 20;
+}
 
 // ── Bot scan ──────────────────────────────────────────────────────────────────
 function runBotScan() {
@@ -2291,10 +3013,111 @@ function runBotScan() {
     }
   }
 
+  if (BOT_STRATEGIES.trendFollower) {
+    readTrendFollowerParams();
+
+    var emaKey = BOT_TF_MA === 200 ? 'e200' : BOT_TF_MA === 50 ? 'e50' : 'e20';
+    var emaArr = ANA.emas[emaKey];
+    var emaVal = emaArr ? emaArr[emaArr.length - 1] : null;
+    var maLbl  = 'EMA' + BOT_TF_MA;
+
+    if (!emaVal) {
+      BOT_LOG.push({ time: now, strategy: 'Trend Follower', signal: 'NO DATA', dir: '—',
+        detail: maLbl + ' not computed — need more bars' });
+    } else {
+      // Resolve effective trend direction
+      var effTrend = BOT_TF_TREND;
+      if (effTrend === 'auto') {
+        var tot = ANA.trend ? ANA.trend.total : 0;
+        effTrend = tot > 0 ? 'up' : tot < 0 ? 'down' : null;
+      }
+
+      var touchZone = atrLast * 0.6; // price within 0.6× ATR of MA = "touching"
+      var dist      = price - emaVal; // positive = price above MA
+      var touching  = Math.abs(dist) <= touchZone;
+
+      if (!effTrend) {
+        BOT_LOG.push({ time: now, strategy: 'Trend Follower', signal: 'NEUTRAL', dir: '—',
+          detail: maLbl + ' ' + emaVal.toFixed(2) + ' · trend unclear — set direction manually' });
+      } else if (!touching) {
+        var awayDir = dist > 0 ? 'above' : 'below';
+        BOT_LOG.push({ time: now, strategy: 'Trend Follower', signal: 'WAITING', dir: '—',
+          detail: maLbl + ' ' + emaVal.toFixed(2) + ' · price ' + awayDir + ' by ' + Math.abs(dist).toFixed(2) + ' — waiting for touch' });
+      } else if (effTrend === 'down') {
+        // Downtrend: price has rallied up to the MA → sell
+        var slSell = parseFloat((emaVal + atrLast * 1.0).toFixed(2));
+        var tpSell = parseFloat((price  - atrLast * 2.0).toFixed(2));
+        BOT_LOG.push({ time: now, strategy: 'Trend Follower', signal: 'SELL @ ' + maLbl, dir: 'sell',
+          entry: parseFloat(price.toFixed(2)), sl: slSell, tp: tpSell,
+          detail: 'Downtrend · rally to ' + maLbl + ' ' + emaVal.toFixed(2) + ' · SL ' + slSell + ' · TP ' + tpSell });
+      } else if (effTrend === 'up') {
+        // Uptrend: price has pulled back down to the MA → buy
+        var slBuy = parseFloat((emaVal - atrLast * 1.0).toFixed(2));
+        var tpBuy = parseFloat((price  + atrLast * 2.0).toFixed(2));
+        BOT_LOG.push({ time: now, strategy: 'Trend Follower', signal: 'BUY @ ' + maLbl, dir: 'buy',
+          entry: parseFloat(price.toFixed(2)), sl: slBuy, tp: tpBuy,
+          detail: 'Uptrend · dip to ' + maLbl + ' ' + emaVal.toFixed(2) + ' · SL ' + slBuy + ' · TP ' + tpBuy });
+      }
+    }
+  }
+
   renderBotLog();
 
   // Auto-dispatch when bot is ON
   if (BOT_ENABLED) autoBotDispatch();
+}
+
+// ── Entry gate — tight quality filter before any dispatch ────────────────────
+function passesEntryGate(sig) {
+  if (!sig.entry || !sig.sl || !sig.tp || sig.dir === '—') return false;
+
+  // 1. Minimum 1.5:1 RR
+  var risk   = Math.abs(sig.entry - sig.sl);
+  var reward = Math.abs(sig.tp    - sig.entry);
+  if (risk === 0 || reward / risk < 1.5) return false;
+
+  if (!ANA) return false; // no data yet
+
+  // 2. Trend alignment — don't trade against a confirmed trend
+  if (ANA.trend) {
+    var td = ANA.trend.direction;
+    if (sig.dir === 'sell' && (td === 'STRONG BULL' || td === 'BULLISH')) return false;
+    if (sig.dir === 'buy'  && (td === 'STRONG BEAR' || td === 'BEARISH')) return false;
+  }
+
+  // 3. Entry must be within 2× ATR of a matching S/R zone
+  var atrArr  = ANA.atr.filter(function(v){ return v !== null; });
+  var atrLast = atrArr[atrArr.length - 1] || 1;
+  var hasZone = ANA.zones.some(function(z) {
+    if (Math.abs(z.price - sig.entry) > atrLast * 2) return false;
+    if (sig.dir === 'buy'  && (z.type === 'support'    || z.type === 'both')) return true;
+    if (sig.dir === 'sell' && (z.type === 'resistance' || z.type === 'both')) return true;
+    return false;
+  });
+  if (!hasZone) return false;
+
+  // 4. RSI must not strongly oppose direction
+  var rsiArr = ANA.rsi.filter(function(v){ return v !== null; });
+  if (rsiArr.length) {
+    var rsi = rsiArr[rsiArr.length - 1];
+    if (sig.dir === 'buy'  && rsi > 72) return false; // buying into overbought
+    if (sig.dir === 'sell' && rsi < 28) return false; // selling into oversold
+  }
+
+  return true;
+}
+
+// Count consecutive LOSS-marked signals from most recent backwards
+function countConsecLosses() {
+  var sigs  = loadSigLog();
+  var count = 0;
+  for (var i = sigs.length - 1; i >= 0; i--) {
+    var st = sigs[i].status;
+    if      (st === 'LOSS')              count++;
+    else if (st === 'WIN' || st === 'BE') break;
+    // LIVE / PENDING / CANCEL don't reset or count the streak
+  }
+  return count;
 }
 
 // ── Bot auto-dispatch ─────────────────────────────────────────────────────────
@@ -2308,10 +3131,47 @@ function autoBotDispatch() {
   var cooldown = 45 * 60 * 1000; // 45-minute cooldown per unique signal
   var sent     = 0;
 
-  BOT_LOG.forEach(function(s, idx) {
-    if (!s.entry || !s.sl || !s.tp || s.dir === '—') return; // no valid setup
+  // ── Expiry check ──────────────────────────────────────────────────────────
+  if (BOT_EXPIRY_TIME) {
+    var parts  = BOT_EXPIRY_TIME.split(':');
+    var expiry = new Date();
+    expiry.setHours(parseInt(parts[0]) || 0, parseInt(parts[1]) || 0, 0, 0);
+    if (new Date() >= expiry) {
+      var sw = document.getElementById('botMasterSwitch');
+      if (sw) sw.checked = false;
+      toggleBotMaster(false);
+      showBotToast('Bot expired at ' + BOT_EXPIRY_TIME + ' — auto-disabled', 'warn');
+      return;
+    }
+  }
+
+  // ── Max trade cap ─────────────────────────────────────────────────────────
+  if (BOT_MAX_TRADES > 0 && BOT_TRADE_COUNT >= BOT_MAX_TRADES) {
+    var sw = document.getElementById('botMasterSwitch');
+    if (sw) sw.checked = false;
+    toggleBotMaster(false);
+    showBotToast('Max trades reached (' + BOT_MAX_TRADES + ') — bot disabled', 'warn');
+    return;
+  }
+
+  // ── Loss protection ───────────────────────────────────────────────────────
+  if (BOT_LOSS_LIMIT > 0) {
+    var losses = countConsecLosses();
+    if (losses >= BOT_LOSS_LIMIT) {
+      var sw = document.getElementById('botMasterSwitch');
+      if (sw) sw.checked = false;
+      toggleBotMaster(false);
+      showBotToast('Loss protection: ' + losses + ' consecutive losses — bot disabled', 'err');
+      return;
+    }
+  }
+
+  // ── Tight entry gate + cooldown ───────────────────────────────────────────
+  BOT_LOG.forEach(function(s) {
+    if (!passesEntryGate(s)) return;
     var key = botSigKey(s);
-    if (BOT_SENT_SIGS[key] && (now - BOT_SENT_SIGS[key]) < cooldown) return; // already dispatched
+    if (BOT_SENT_SIGS[key] && (now - BOT_SENT_SIGS[key]) < cooldown) return;
+    if (BOT_MAX_TRADES > 0 && BOT_TRADE_COUNT >= BOT_MAX_TRADES) return;
 
     BOT_SENT_SIGS[key] = now;
     dispatchBotSignal(s);
@@ -2344,6 +3204,7 @@ function dispatchBotSignal(s) {
   var sigs = loadSigLog();
   sigs.push(sig);
   saveSigLog(sigs);
+  BOT_TRADE_COUNT++;
   renderSigLog();
   sendSignalToMT4(sig.id);
 }

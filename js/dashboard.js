@@ -1,6 +1,8 @@
-'use strict';
+﻿'use strict';
 
 var STMT_KEY    = 'wayne_stmt_v1';
+var FLAGS_KEY   = 'wayne_trade_flags';
+var COMMENTS_KEY = 'wayne_flag_cmt_list';
 var stmtTrades  = [];
 var stmtSummary = {};
 var stmtCharts  = {};
@@ -20,6 +22,148 @@ var calMonth   = 0;
 var calInited  = false;
 var MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
+// ── Trade flag helpers (system trade tagging) ─────────────────────────────────
+
+function loadTradeFlags() {
+  try { return JSON.parse(localStorage.getItem(FLAGS_KEY) || '{}'); } catch(e) { return {}; }
+}
+function saveTradeFlags(flags) { localStorage.setItem(FLAGS_KEY, JSON.stringify(flags)); }
+
+// ── Saved comment list (for autocomplete + CRUD) ──────────────────────────────
+function loadSavedComments() {
+  try { return JSON.parse(localStorage.getItem(COMMENTS_KEY) || '[]'); } catch(e) { return []; }
+}
+function saveSavedComments(list) { localStorage.setItem(COMMENTS_KEY, JSON.stringify(list)); }
+
+function addSavedComment(comment) {
+  if (!comment) return;
+  var list = loadSavedComments();
+  if (list.indexOf(comment) < 0) { list.unshift(comment); saveSavedComments(list); }
+}
+function deleteSavedComment(comment) {
+  saveSavedComments(loadSavedComments().filter(function(c){ return c !== comment; }));
+  renderModalCommentChips();
+  populateCommentDatalist();
+}
+function populateCommentDatalist() {
+  var dl = document.getElementById('commentSuggestions');
+  if (!dl) return;
+  dl.innerHTML = loadSavedComments().map(function(c) {
+    return '<option value="' + c.replace(/"/g, '&quot;') + '">';
+  }).join('');
+}
+function renderModalCommentChips() {
+  var el = document.getElementById('flagCommentChips');
+  if (!el) return;
+  var list = loadSavedComments();
+  if (!list.length) {
+    el.innerHTML = '<span style="color:var(--muted);font-size:10px;font-style:italic">Type a comment above — it will be saved for reuse</span>';
+    return;
+  }
+  el.innerHTML = list.map(function(c) {
+    var safe  = c.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    var click = 'document.getElementById(\'flagModalComment\').value=\'' + safe + '\'';
+    return '<span class="comment-chip" onclick="' + click + '" title="Click to use">' +
+      c + '<button class="comment-chip-del" onclick="event.stopPropagation();deleteSavedComment(\'' + safe + '\')" title="Delete">&#10005;</button>' +
+    '</span>';
+  }).join('');
+}
+
+function openFlagModal(ticket) {
+  var flags = loadTradeFlags();
+  var key   = String(ticket);
+  document.getElementById('flagModalTicket').textContent = ticket;
+  document.getElementById('flagModalTicketVal').value    = key;
+  document.getElementById('flagModalComment').value      = flags[key] ? (flags[key].comment || '') : '';
+  populateCommentDatalist();
+  renderModalCommentChips();
+  document.getElementById('flagModal').style.display = 'flex';
+  setTimeout(function(){ document.getElementById('flagModalComment').focus(); }, 60);
+}
+function cancelFlagModal() { document.getElementById('flagModal').style.display = 'none'; }
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Enter'  && document.getElementById('flagModal').style.display !== 'none') saveFlaggedTrade();
+  if (e.key === 'Escape' && document.getElementById('flagModal').style.display !== 'none') cancelFlagModal();
+});
+function saveFlaggedTrade() {
+  var key     = document.getElementById('flagModalTicketVal').value;
+  var comment = document.getElementById('flagModalComment').value.trim();
+  var flags   = loadTradeFlags();
+  flags[key]  = { isSystem: true, comment: comment, flaggedAt: new Date().toISOString() };
+  saveTradeFlags(flags);
+  addSavedComment(comment);
+  cancelFlagModal();
+  renderTradeLog(applyFilter(stmtTrades));
+  renderKPIs(stmtTrades);
+  renderCategoryBadges();
+}
+function unflagTrade(ticket) {
+  var flags = loadTradeFlags();
+  delete flags[String(ticket)];
+  saveTradeFlags(flags);
+  renderTradeLog(applyFilter(stmtTrades));
+  renderKPIs(stmtTrades);
+  renderCategoryBadges();
+}
+
+// ── System category badges ────────────────────────────────────────────────────
+function renderCategoryBadges() {
+  var section = document.getElementById('sysCatSection');
+  var el      = document.getElementById('sysCategoryBadges');
+  if (!el) return;
+
+  var flags = loadTradeFlags();
+  var keys  = Object.keys(flags);
+  if (!section) return;
+  if (!keys.length) { section.style.display = 'none'; return; }
+  section.style.display = 'block';
+
+  // Group by comment
+  var cats = {};
+  keys.forEach(function(ticket) {
+    var f   = flags[ticket];
+    var cat = (f.comment || '').trim() || 'Uncategorised';
+    if (!cats[cat]) cats[cat] = { wins: 0, losses: 0, pl: 0 };
+    var trade = stmtTrades.find(function(t){ return String(t.ticket) === ticket; });
+    if (trade) {
+      if (trade.profit > 0) cats[cat].wins++;
+      else cats[cat].losses++;
+      cats[cat].pl += trade.profit;
+    }
+  });
+
+  var sorted = Object.keys(cats).map(function(cat) {
+    var d     = cats[cat];
+    var total = d.wins + d.losses;
+    var wr    = total ? d.wins / total * 100 : 0;
+    return { cat: cat, wins: d.wins, losses: d.losses, total: total, wr: wr, pl: d.pl };
+  }).sort(function(a,b){ return b.total - a.total; }).slice(0, 10);
+
+  var active = logFilter.indexOf('sys:') === 0 ? logFilter.slice(4) : null;
+
+  el.innerHTML = sorted.map(function(d) {
+    var wrCls  = d.wr >= 60 ? 'sys-cat-good' : d.wr < 40 && d.total > 0 ? 'sys-cat-bad' : '';
+    var actCls = active === d.cat ? ' sys-cat-active' : '';
+    var plStr  = (d.pl >= 0 ? '+' : '') + 'R' + Math.round(d.pl).toLocaleString();
+    var safe   = d.cat.replace(/'/g, "\\'");
+    return '<div class="sys-cat-badge ' + wrCls + actCls + '" onclick="filterByCategory(\'' + safe + '\')" title="Filter trade log by this category">' +
+      '<span class="sys-cat-name">' + d.cat + '</span>' +
+      '<span class="sys-cat-stats">' + d.total + ' · ' + d.wr.toFixed(0) + '% WR · ' + plStr + '</span>' +
+    '</div>';
+  }).join('');
+}
+
+function filterByCategory(cat) {
+  logFilter = cat ? 'sys:' + cat : 'all';
+  logPage   = 1;
+  renderLogFilters();
+  var filtered = applyFilter(stmtTrades);
+  renderTradeLog(filtered);
+  if (stmtCharts.winloss) { stmtCharts.winloss.destroy(); stmtCharts.winloss = null; }
+  renderWinLossChart(filtered);
+  renderCategoryBadges(); // re-render to update active state
+}
+
 // ── Tab switching ─────────────────────────────────────────────────────────────
 
 function showTab(tab) {
@@ -29,6 +173,9 @@ function showTab(tab) {
   document.getElementById('tab-' + tab).classList.add('active');
   if (tab === 'dashboard') initDashboard();
   if (tab === 'calendar')  initCalendar();
+  if (tab === 'analysis')  initAnalysis();
+  var fsync = document.getElementById('anaFloatSync');
+  if (fsync) fsync.style.display = tab === 'analysis' ? 'flex' : 'none';
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
@@ -51,12 +198,18 @@ function initDashboard() {
 }
 
 function fetchStatement() {
-  fetch('DetailedStatement.htm')
-    .then(function(r) { if (!r.ok) throw new Error('not found'); return r.text(); })
-    .then(function(html) { handleFetched(html); })
+  // Prefer WayneStatement.csv (EA export); fall back to DetailedStatement.htm
+  fetch('data/statement/WayneStatement.csv')
+    .then(function(r) { if (!r.ok) throw new Error('no csv'); return r.text(); })
+    .then(function(csv) { handleFetchedCSV(csv); })
     .catch(function() {
-      document.getElementById('dashLoader').style.display  = 'block';
-      document.getElementById('dashContent').style.display = 'none';
+      fetch('DetailedStatement.htm')
+        .then(function(r) { if (!r.ok) throw new Error('not found'); return r.text(); })
+        .then(function(html) { handleFetched(html); })
+        .catch(function() {
+          document.getElementById('dashLoader').style.display  = 'block';
+          document.getElementById('dashContent').style.display = 'none';
+        });
     });
 }
 
@@ -69,8 +222,57 @@ function reloadStatement() {
   fetchStatement();
 }
 
+function syncMT4() {
+  var btn    = document.getElementById('syncBtn');
+  var status = document.getElementById('syncStatus');
+  btn.disabled   = true;
+  btn.textContent = '⟳ Syncing…';
+  status.style.color = 'var(--muted)';
+  status.textContent  = '';
+
+  fetch('/api/sync', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.ok) {
+        btn.textContent    = '✓ Synced';
+        status.style.color = 'var(--green)';
+        status.textContent = 'MT4 files copied';
+        setTimeout(function() {
+          btn.textContent = '↧ Sync MT4';
+          btn.disabled    = false;
+          status.textContent = '';
+          reloadStatement();
+        }, 1500);
+      } else {
+        btn.textContent    = '✗ Failed';
+        status.style.color = 'var(--red)';
+        status.textContent = data.output ? data.output.split('\n')[0] : 'sync error';
+        setTimeout(function() {
+          btn.textContent = '↧ Sync MT4';
+          btn.disabled    = false;
+        }, 4000);
+      }
+    })
+    .catch(function() {
+      btn.textContent    = '↧ Sync MT4';
+      btn.disabled       = false;
+      status.style.color = 'var(--red)';
+      status.textContent = 'Server not running — use: py server.py';
+    });
+}
+
 function handleFetched(html) {
   var result    = parseStatement(html);
+  stmtTrades    = result.trades;
+  stmtSummary   = result.summary;
+  stmtTradesHF  = stmtTrades;
+  stmtSummaryHF = stmtSummary;
+  cacheStmt();
+  renderDashboard();
+}
+
+function handleFetchedCSV(csv) {
+  var result    = parseWayneCSV(csv);
   stmtTrades    = result.trades;
   stmtSummary   = result.summary;
   stmtTradesHF  = stmtTrades;
@@ -84,7 +286,9 @@ function loadStatementFile(input) {
   if (!file) return;
   var reader = new FileReader();
   reader.onload = function(e) {
-    var result    = parseStatement(e.target.result);
+    var text   = e.target.result;
+    var isCSV  = file.name.toLowerCase().endsWith('.csv') || text.trimStart().startsWith('# ACCOUNT_SUMMARY');
+    var result = isCSV ? parseWayneCSV(text) : parseStatement(text);
     stmtTrades    = result.trades;
     stmtSummary   = result.summary;
     stmtTradesHF  = stmtTrades;
@@ -169,6 +373,80 @@ function parseStatement(htmlText) {
   return { trades: trades, summary: summary };
 }
 
+
+// -- Parse WayneStatement.csv (EA export) -------------------------------------
+
+function parseWayneCSV(text) {
+  var trades  = [];
+  var summary = {};
+  var lines   = text.split('\n');
+  var headers = null;
+
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (!line) continue;
+
+    if (line === '# ACCOUNT_SUMMARY') {
+      var sl    = (lines[i + 1] || '').trim();
+      var parts = sl.split(',');
+      var sm    = {};
+      for (var j = 0; j < parts.length - 1; j += 2) sm[parts[j].trim()] = parts[j + 1].trim();
+      summary.balance  = parseFloat(sm['balance']  || '0');
+      summary.equity   = parseFloat(sm['equity']   || '0');
+      summary.currency = sm['currency'] || 'ZAR';
+      continue;
+    }
+    if (line.startsWith('#')) continue;
+
+    if (!headers) {
+      if (line.startsWith('ticket,')) { headers = line.split(','); }
+      continue;
+    }
+
+    var cols = line.split(',');
+    if (cols.length < headers.length) continue;
+
+    var row = {};
+    for (var k = 0; k < headers.length; k++) row[headers[k]] = (cols[k] || '').trim();
+
+    if (row['status'] !== 'closed') continue;
+    var type = (row['type'] || '').toLowerCase();
+    if (type !== 'buy' && type !== 'sell') continue;
+
+    var profit = parseFloat(row['net_profit'] || row['profit'] || '0');
+    if (isNaN(profit)) continue;
+
+    var openD  = pdCSV(row['open_time']);
+    var closeD = pdCSV(row['close_time']);
+
+    trades.push({
+      ticket:     row['ticket'],
+      openTime:   row['open_time'],
+      type:       type,
+      size:       parseFloat(row['lots']),
+      item:       (row['symbol'] || '').toLowerCase(),
+      openPrice:  parseFloat(row['open_price']),
+      sl:         parseFloat(row['sl']),
+      tp:         parseFloat(row['tp']),
+      closeTime:  row['close_time'],
+      closePrice: parseFloat(row['close_price']),
+      profit:     profit,
+      isSLHit:    row['comment'] === '[sl]',
+      isWin:      profit > 0,
+      openDate:   openD  ? openD.toISOString()  : null,
+      closeDate:  closeD ? closeD.toISOString() : null
+    });
+  }
+
+  summary.closedPL = trades.reduce(function(a, t) { return a + t.profit; }, 0);
+  return { trades: trades, summary: summary };
+}
+
+function pdCSV(s) {
+  if (!s) return null;
+  var m = s.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})/);
+  return m ? new Date(+m[1], +m[2]-1, +m[3], +m[4], +m[5]) : null;
+}
 // helpers
 function pn(s) { return parseFloat(String(s).replace(/[\s ]/g, '').replace(',', '.')); }
 function pd(s) {
@@ -219,7 +497,7 @@ function renderMotivation() {
   var html = '<div id="motivCard" class="motiv-card">'
     + '<div class="motiv-label">&#x26A1; Mindset</div>'
     + '<div class="motiv-quote">&ldquo;Dont give the market your Money. Wait and be patient. You need this!&rdquo;</div>'
-    + '<div class="motiv-attr">&mdash; Wayne</div>'
+    + '<div class="motiv-attr">&mdash; You</div>'
     + '<hr class="motiv-sep">'
     + '<div class="motiv-other-q">&ldquo;' + other.q + '&rdquo;</div>'
     + '<div class="motiv-other-a">' + other.a + '</div>'
@@ -254,6 +532,7 @@ function renderDashboard() {
 
   renderMotivation();
   renderKPIs(stmtTrades);
+  renderCategoryBadges();
   renderEquityChart(stmtTrades);
   renderDailyChart(stmtTrades);
   renderWeeklyChart(stmtTrades);
@@ -301,6 +580,18 @@ function renderKPIs(trades) {
     + '<div class="kpi-card"><div class="kpi-label">Net Deposit</div><div class="kpi-value">' + deposit + '</div><div class="kpi-sub">total funded</div></div>'
     + '</div>';
 
+  // System trades stats
+  var flags       = loadTradeFlags();
+  var sysTrades   = trades.filter(function(t){ return !!flags[String(t.ticket)]; });
+  var sysWins     = sysTrades.filter(function(t){ return t.profit > 0; });
+  var sysLosses   = sysTrades.filter(function(t){ return t.profit <= 0; });
+  var sysWR       = sysTrades.length ? sysWins.length / sysTrades.length * 100 : 0;
+  var sysPL       = sysTrades.reduce(function(s,t){ return s + t.profit; }, 0);
+  var sysKpiVal   = sysTrades.length ? sysWR.toFixed(1) + '%' : '—';
+  var sysKpiSub   = sysTrades.length
+    ? sysTrades.length + ' trades · ' + sysWins.length + 'W ' + sysLosses.length + 'L · ' + rZar(sysPL)
+    : 'No flagged trades yet';
+
   var kpis = [
     { label:'Closed P/L',    value: rZar(totalPL), sub: trades.length + ' closed trades',     cls: totalPL >= 0 ? 'kpi-green' : 'kpi-red' },
     { label:'Win Rate',      value: winRate.toFixed(1) + '%', sub: wins.length + 'W · ' + losses.length + 'L', cls: winRate >= 50 ? 'kpi-green' : 'kpi-red' },
@@ -310,6 +601,7 @@ function renderKPIs(trades) {
     { label:'SL Hits',       value: slHits, sub: trades.length ? (slHits/trades.length*100).toFixed(0) + '% of trades' : '', cls: '' },
     { label:'Best Day',      value: bestDay  ? rZar(bestDay[1])  : '-', sub: bestDay  ? bestDay[0]  : '', cls: 'kpi-green' },
     { label:'Worst Day',     value: worstDay ? rZar(worstDay[1]) : '-', sub: worstDay ? worstDay[0] : '', cls: 'kpi-red' },
+    { label:'System Win Rate', value: sysKpiVal, sub: sysKpiSub, cls: sysTrades.length ? (sysWR >= 50 ? 'kpi-green kpi-sys' : 'kpi-red kpi-sys') : 'kpi-sys' },
   ];
 
   document.getElementById('kpiGrid').innerHTML = acctHtml
@@ -508,9 +800,18 @@ function renderLogFilters() {
   var filters = [{ k:'all', label:'All' }, { k:'buy', label:'Buy' }, { k:'sell', label:'Sell' }]
     .concat(syms.map(function(s){ return { k:s, label:s.toUpperCase() }; }));
 
-  document.getElementById('logFilters').innerHTML = filters.map(function(f) {
+  var html = filters.map(function(f) {
     return '<button class="log-filter-btn' + (logFilter===f.k?' active':'') + '" onclick="setFilter(\'' + f.k + '\')">' + f.label + '</button>';
   }).join('');
+
+  // If a category is active, add a clear chip
+  if (logFilter.indexOf('sys:') === 0) {
+    var catName = logFilter.slice(4);
+    html += '<span class="log-cat-active-chip">' + catName +
+      ' <button class="log-cat-clear" onclick="setFilter(\'all\')" title="Clear filter">&#10005;</button></span>';
+  }
+
+  document.getElementById('logFilters').innerHTML = html;
 }
 
 function setFilter(f) {
@@ -530,8 +831,16 @@ function goPage(p) {
 
 function applyFilter(trades) {
   if (logFilter === 'all') return trades;
-  if (logFilter === 'buy' || logFilter === 'sell') return trades.filter(function(t){return t.type===logFilter;});
-  return trades.filter(function(t){return t.item===logFilter;});
+  if (logFilter === 'buy' || logFilter === 'sell') return trades.filter(function(t){ return t.type === logFilter; });
+  if (logFilter.indexOf('sys:') === 0) {
+    var cat   = logFilter.slice(4);
+    var flags = loadTradeFlags();
+    return trades.filter(function(t) {
+      var f = flags[String(t.ticket)];
+      return f && ((f.comment || '').trim() || 'Uncategorised') === cat;
+    });
+  }
+  return trades.filter(function(t){ return t.item === logFilter; });
 }
 
 function renderTradeLog(trades) {
@@ -542,13 +851,20 @@ function renderTradeLog(trades) {
   var start    = (logPage - 1) * LOG_PAGE_SZ;
   var pageRows = sorted.slice(start, start + LOG_PAGE_SZ);
 
+  var flags = loadTradeFlags();
   document.getElementById('tradeLogBody').innerHTML = pageRows.map(function(t) {
     var slBadge  = t.isSLHit ? '<span class="log-sl">SL</span>' : '';
     var profCls  = t.profit >= 0 ? 'profit-pos' : 'profit-neg';
     var dirCls   = t.type === 'buy' ? 'dir-buy' : 'dir-sell';
     var openStr  = t.openTime  ? t.openTime.slice(0,16)  : '';
     var closeStr = t.closeTime ? t.closeTime.slice(0,16) : '';
-    return '<tr>'
+    var key      = String(t.ticket);
+    var flag     = flags[key];
+    var sysTd    = flag
+      ? '<span class="log-sys-badge" title="' + (flag.comment || 'System trade') + '">SYS</span>'
+        + ' <button class="log-unflag-btn" onclick="unflagTrade(\'' + key + '\')" title="Remove flag">&#10005;</button>'
+      : '<button class="log-flag-btn" onclick="openFlagModal(\'' + key + '\')">Flag</button>';
+    return '<tr class="' + (flag ? 'log-row-sys' : '') + '">'
       + '<td>' + t.ticket + slBadge + '</td>'
       + '<td>' + openStr  + '</td>'
       + '<td>' + closeStr + '</td>'
@@ -560,6 +876,7 @@ function renderTradeLog(trades) {
       + '<td>' + (t.sl > 0 ? t.sl.toFixed(2) : '-') + '</td>'
       + '<td class="' + dirCls + '">' + (t.isWin ? 'WIN' : 'LOSS') + '</td>'
       + '<td class="' + profCls + '">' + (t.profit >= 0 ? '+' : '') + Math.round(t.profit).toLocaleString() + '</td>'
+      + '<td class="log-sys-cell">' + sysTd + '</td>'
       + '</tr>';
   }).join('');
 
@@ -666,7 +983,7 @@ function setAccount(n) {
     stmtSummary = stmtSummaryHF;
     acctPrefix  = 'R';
     var sub = document.getElementById('dashSub');
-    if (sub) sub.textContent = 'HF Markets SA · Account 69228294 · ZAR';
+    if (sub) sub.textContent = 'Account 1 · ZAR';
   }
   calInited = false;
   destroyCharts();

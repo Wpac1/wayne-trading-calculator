@@ -328,14 +328,8 @@
     </div>
   </div>
 
-  <!-- Interval + bars toolbar -->
+  <!-- Bars toolbar — TF is now set automatically from the selected symbol chip -->
   <div class="ana-toolbar">
-    <span class="ana-tb-label">TF:</span>
-    <button class="ana-itvl-btn active" id="itvl-M15"  onclick="setAnaInterval('M15')">M15</button>
-    <button class="ana-itvl-btn"        id="itvl-H1"   onclick="setAnaInterval('H1')">H1</button>
-    <button class="ana-itvl-btn"        id="itvl-H4"   onclick="setAnaInterval('H4')">H4</button>
-    <button class="ana-itvl-btn"        id="itvl-D1"   onclick="setAnaInterval('D1')">D1</button>
-    <div class="ana-toolbar-sep"></div>
     <span class="ana-tb-label">Bars:</span>
     <button class="ana-bars-btn"        id="bars-100"  onclick="setAnaBars(100)">100</button>
     <button class="ana-bars-btn active" id="bars-200"  onclick="setAnaBars(200)">200</button>
@@ -390,6 +384,11 @@
 
       <!-- Sidebar -->
       <div class="ana-neon-sidebar">
+        <!-- AMD Phase -->
+        <div class="ana-neon-card">
+          <div class="ana-neon-card-head">AMD Phase <span style="font-size:9px;color:var(--muted);text-transform:none;letter-spacing:0">Accum &middot; Manip &middot; Delivery</span></div>
+          <div id="anaAMD"><div class="amd-empty">Load data to detect phase</div></div>
+        </div>
         <!-- Key Levels -->
         <div class="ana-neon-card">
           <div class="ana-neon-card-head">Key Levels <span style="font-size:9px;color:var(--muted);text-transform:none;letter-spacing:0">str / touches / dist</span></div>
@@ -401,6 +400,15 @@
           <div id="anaTrend"></div>
         </div>
       </div>
+    </div>
+
+    <!-- Market Insights -->
+    <div class="ana-neon-card" style="margin-bottom:10px">
+      <div class="ana-neon-card-head">
+        Market Insights
+        <span style="font-size:9px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">confluence &middot; ranges &middot; FVGs &middot; bias</span>
+      </div>
+      <div id="anaInsights"><div style="color:var(--dim);font-size:11px">Load data to generate insights</div></div>
     </div>
 
     <!-- Patterns + Fibonacci -->
@@ -516,6 +524,23 @@
           <button class="bot-test-btn" onclick="testBotSignal()" title="Fire a test signal: LMT 4500 SL 4490 TP 4550">&#9889; Test</button>
         </div>
 
+        <!-- Session limits — shown when bot is ON -->
+        <div id="botLimitsRow" class="bot-limits-row" style="display:none">
+          <div class="bot-limit-chip" title="Stop the bot after this many trades (blank = unlimited)">
+            <span class="bot-limit-chip-lbl">Max trades</span>
+            <input type="number" id="botMaxTrades" class="bot-limit-input" min="1" max="99" placeholder="&#8734;">
+          </div>
+          <div class="bot-limit-chip" title="Auto-disable bot at this local time">
+            <span class="bot-limit-chip-lbl">Expire at</span>
+            <input type="time" id="botExpiryTime" class="bot-limit-input">
+          </div>
+          <div class="bot-limit-chip" title="Stop bot after X consecutive losses">
+            <span class="bot-limit-chip-lbl">Max losses</span>
+            <input type="number" id="botLossLimit" class="bot-limit-input" min="1" max="20" placeholder="off">
+          </div>
+          <span class="bot-gate-badge">&#9670; Entry gate: S/R zone &middot; trend &middot; RSI &middot; 1.5R min</span>
+        </div>
+
         <!-- Default Features -->
         <div class="bot-section-head">Default Features</div>
         <div class="bot-features">
@@ -560,6 +585,31 @@
             <label class="bot-toggle"><input type="checkbox" onchange="setBotStrategy('asiaBreakout',this.checked)"><span class="bot-toggle-track"><span class="bot-toggle-thumb"></span></span></label>
             <div class="bot-feat-info"><span class="bot-feat-name">Asia Breakout</span><span class="bot-feat-desc">Buy/sell breakout of 10-hr Asian range · 50 pip TP · active 01:00–09:00 local</span></div>
           </div>
+          <div class="bot-vault-row">
+            <label class="bot-toggle"><input type="checkbox" id="chkTrendFollower" onchange="setBotStrategy('trendFollower',this.checked);toggleTrendFollowerParams(this.checked)"><span class="bot-toggle-track"><span class="bot-toggle-thumb"></span></span></label>
+            <div class="bot-feat-info"><span class="bot-feat-name">Trend Follower</span><span class="bot-feat-desc">Sell rally to MA in downtrend · buy dip to MA in uptrend · 2R ATR target</span></div>
+          </div>
+        </div>
+
+        <!-- Trend Follower parameters — shown when enabled -->
+        <div id="trendFollowerParams" class="bot-strategy-params" style="display:none">
+          <div class="bot-param-chip">
+            <span class="bot-param-lbl">Trend</span>
+            <select id="tfTrend" class="bot-param-select" onchange="readTrendFollowerParams()">
+              <option value="auto">Auto-detect</option>
+              <option value="down">Down &mdash; sell on MA touch</option>
+              <option value="up">Up &mdash; buy on MA touch</option>
+            </select>
+          </div>
+          <div class="bot-param-chip">
+            <span class="bot-param-lbl">Moving average</span>
+            <select id="tfMA" class="bot-param-select" onchange="readTrendFollowerParams()">
+              <option value="20">EMA 20</option>
+              <option value="50">EMA 50</option>
+              <option value="200">EMA 200</option>
+            </select>
+          </div>
+          <span class="bot-param-hint">&#9670; fires when price touches the selected MA</span>
         </div>
 
         <!-- Market Read -->
